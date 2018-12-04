@@ -1,5 +1,5 @@
 syntax = "proto3";
-package main;
+package ipshare.sync;
 
 import "github.com/gogo/protobuf/gogoproto/gogo.proto";
 
@@ -18,15 +18,9 @@ option go_package = "sync";
 
 message SingleOp {
     string value = 1;
-    repeated string children = 2;
-    repeated string parents = 3;
+    repeated string parents = 2;
 }
 
 message GraphOps {
     repeated SingleOp ops = 1;
-}
-
-message DynamicShareData {
-    repeated string shareWith = 1;
-    repeated SingleOp ops = 2;
 }

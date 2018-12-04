@@ -1,23 +1,22 @@
-package sync
+package utils
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	host "github.com/libp2p/go-libp2p-host"
+	pstore "github.com/libp2p/go-libp2p-peerstore"
+	ma "github.com/multiformats/go-multiaddr"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"sync"
-
-	host "github.com/libp2p/go-libp2p-host"
-	pstore "github.com/libp2p/go-libp2p-peerstore"
-	ma "github.com/multiformats/go-multiaddr"
 )
 
 // IPFS bootstrapping parameters
 var (
-	IPFS_PEERS = convertPeers([]string{
+	ipfsPeers = convertPeers([]string{
 		"/ip4/104.131.131.82/tcp/4001/ipfs/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ",
 		"/ip4/104.236.179.241/tcp/4001/ipfs/QmSoLPppuBtQSGwKDZT2M73ULpjvfd3aZ6ha4oFGL1KrGM",
 		"/ip4/128.199.219.111/tcp/4001/ipfs/QmSoLSafTMBsPKadTEgaXctDQVcqN88CNLHXMkTNwMKPnu",
@@ -28,7 +27,7 @@ var (
 		"/ip6/2604:a880:800:10::4a:5001/tcp/4001/ipfs/QmSoLV4Bbm51jM9C4gDYZQ9Cy3U6aXMJDAbzgu2fzaDs64",
 		"/ip6/2a03:b0c0:0:1010::23:1001/tcp/4001/ipfs/QmSoLer265NRgSp2LA3dPaeykiS1J6DifTC88f5uVQKNAd",
 	})
-	LOCAL_PEER_ENDPOINT = "http://localhost:5001/api/v0/id"
+	localPeerEndpoint = "http://localhost:5001/api/v0/id"
 )
 
 // IDOutput Borrowed from ipfs code to parse the results of the command `ipfs id`
@@ -42,7 +41,7 @@ type IDOutput struct {
 
 // quick and dirty function to get the local ipfs daemons address for bootstrapping
 func getLocalPeerInfo() []pstore.PeerInfo {
-	resp, err := http.Get(LOCAL_PEER_ENDPOINT)
+	resp, err := http.Get(localPeerEndpoint)
 	if err != nil {
 		log.Fatalln(err)
 	}
