@@ -97,6 +97,11 @@
       "hash": "QmSteomMgXnSQxLEY5UpxmkYAd8QF9JuLLeLYBokTHxFru",
       "name": "go-libp2p-kad-dht",
       "version": "4.4.8"
+    },
+    {
+      "hash": "QmRoARq3nkUb13HSKZGepCZSWe5GrVPwx7xURJGZ7KWv9V",
+      "name": "go-ipld-cbor",
+      "version": "1.5.7"
     }
   ],
   "gxVersion": "0.12.1",

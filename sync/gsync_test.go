@@ -44,17 +44,20 @@ func waitForGraphSize(gp GraphProvider, graphSize int) {
 
 	<-c
 
-	mapToValueList := func(m map[key.Key]DagNode) []DagNode {
-		lst := make([]DagNode, len(m))
+	mapToValueList := func(m map[key.Key]DagNode) []string {
+		lst := make([]string, len(m))
+		i := 0
 		for _, v := range m {
-			lst = append(lst, v)
+			lst[i] = v.GetAsOp().Value
+			i++
 		}
 		return lst
 	}
 
 	for _, v := range gp.GetDagNodes() {
 		op := v.GetAsOp()
-		log.Printf("ID: %v | Children %v | Parents %v", op.Value, mapToValueList(v.GetChildren()), op.Parents)
+		children := mapToValueList(v.GetChildren())
+		log.Printf("ID: %v | Children %v | Parents %v", op.Value, children, op.Parents)
 	}
 }
 
@@ -67,23 +70,6 @@ func printDag(t *testing.T, n DagNode, level int) {
 	for _, parent := range n.GetParents() {
 		printDag(t, parent, level+1)
 	}
-}
-
-type localStorageType struct {
-	peers []peer.ID
-	ops   []*SingleOp
-}
-
-type MockIPNSLocalStorage struct {
-	Storage map[key.Key]localStorageType
-}
-
-func (ls *MockIPNSLocalStorage) GetPeers(IPNSKey key.Key) []peer.ID {
-	return ls.Storage[IPNSKey].peers
-}
-
-func (ls *MockIPNSLocalStorage) GetOps(IPNSKey key.Key) []*SingleOp {
-	return ls.Storage[IPNSKey].ops
 }
 
 //TODO: Add unit tests of gsync in addition to the integration tests
@@ -110,31 +96,40 @@ func createHostAndPeers(rnd *mrand.Rand, startPort, numHosts int, printPeers boo
 	return hosts, peers, nil
 }
 
-func TestOneChangeGraphSync(t *testing.T) {
+func baseTestOneChangeGraphSync() (graph1, graph2 GraphProvider, err error) {
 	reader := mrand.New(mrand.NewSource(mrand.Int63()))
-	hosts, peers, err := createHostAndPeers(reader, 10001, 3, true)
+	hosts, peers, err := createHostAndPeers(reader, 10001, 2, true)
 
+	if err != nil {
+		return
+	}
+
+	graphKey := key.Key("TestGraph")
+
+	root := &SingleOp{Value: "100", Parents: []string{}}
+	child := &SingleOp{Value: "101", Parents: []string{"100"}}
+
+	u1 := NewMemoryIPNSLocalStorage()
+	u1.AddPeers(graphKey, peers[1])
+	u1.AddOps(graphKey, root)
+	gs1 := NewGraphSychronizer(hosts[0], u1, mrand.NewSource(1))
+
+	u2 := NewMemoryIPNSLocalStorage()
+	u2.AddPeers(graphKey, peers[0])
+	u2.AddOps(graphKey, root, child)
+	gs2 := NewGraphSychronizer(hosts[1], u2, mrand.NewSource(2))
+
+	graph1 = gs1.GetGraphProvider(graphKey)
+	graph2 = gs2.GetGraphProvider(graphKey)
+	return
+}
+
+func TestOneChangeGraphSync(t *testing.T) {
+	gp1, _, err := baseTestOneChangeGraphSync()
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	g1Root := &SingleOp{Value: "100", Parents: []string{}}
-	g2Root := &SingleOp{Value: "100", Parents: []string{}}
-	g2Child := &SingleOp{Value: "101", Parents: []string{"100"}}
-
-	gs1 := NewGraphSychronizer(hosts[0], []key.Key{"TestGraph"},
-		&MockIPNSLocalStorage{Storage: map[key.Key]localStorageType{
-			key.Key("TestGraph"): localStorageType{peers: []peer.ID{peers[1]}, ops: []*SingleOp{g1Root}},
-		}},
-		mrand.NewSource(1))
-
-	_ = NewGraphSychronizer(hosts[1], []key.Key{"TestGraph"},
-		&MockIPNSLocalStorage{Storage: map[key.Key]localStorageType{
-			key.Key("TestGraph"): localStorageType{peers: []peer.ID{peers[2]}, ops: []*SingleOp{g2Root, g2Child}},
-		}},
-		mrand.NewSource(2))
-
-	gp1 := gs1.GetGraphProvider("TestGraph")
 	waitForGraphSize(gp1, 2)
 
 	for _, op := range gp1.GetOps() {
@@ -154,70 +149,52 @@ func TestOneChangeGraphSync(t *testing.T) {
 }
 
 func TestOneSyncAndOneUpdate(t *testing.T) {
-	reader := mrand.New(mrand.NewSource(mrand.Int63()))
-	hosts, peers, err := createHostAndPeers(reader, 10001, 3, true)
-
+	gp1, gp2, err := baseTestOneChangeGraphSync()
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	g1Root := &SingleOp{Value: "100", Parents: []string{}}
-	g2Root := &SingleOp{Value: "100", Parents: []string{}}
-	g2Child := &SingleOp{Value: "101", Parents: []string{"100"}}
-
-	gs1 := NewGraphSychronizer(hosts[0], []key.Key{"TestGraph"},
-		&MockIPNSLocalStorage{Storage: map[key.Key]localStorageType{
-			key.Key("TestGraph"): localStorageType{peers: []peer.ID{peers[1]}, ops: []*SingleOp{g1Root}},
-		}},
-		mrand.NewSource(1))
-
-	gs2 := NewGraphSychronizer(hosts[1], []key.Key{"TestGraph"},
-		&MockIPNSLocalStorage{Storage: map[key.Key]localStorageType{
-			key.Key("TestGraph"): localStorageType{peers: []peer.ID{peers[0]}, ops: []*SingleOp{g2Root, g2Child}},
-		}},
-		mrand.NewSource(2))
-
-	gp1 := gs1.GetGraphProvider("TestGraph")
-	gp2 := gs2.GetGraphProvider("TestGraph")
 
 	gp2.Update(&SingleOp{Value: "102", Parents: []string{"101"}})
 
 	waitForGraphSize(gp1, 3)
 }
 
-func twoGraphTestBase(t *testing.T) (gs1, gs2, gs3 GraphSynchronizer) {
+func twoGraphTestBase() (gs1, gs2, gs3 GraphSynchronizer, err error) {
 	reader := mrand.New(mrand.NewSource(mrand.Int63()))
 	hosts, peers, err := createHostAndPeers(reader, 10001, 3, true)
 
 	if err != nil {
-		t.Fatal(err)
+		return
 	}
 
-	gRoot := &SingleOp{Value: "100", Parents: []string{}}
-	gChild := &SingleOp{Value: "101", Parents: []string{"100"}}
+	root := &SingleOp{Value: "100", Parents: []string{}}
+	child := &SingleOp{Value: "101", Parents: []string{"100"}}
 
-	gs1 = NewGraphSychronizer(hosts[0], []key.Key{"G1"},
-		&MockIPNSLocalStorage{Storage: map[key.Key]localStorageType{
-			key.Key("G1"): localStorageType{peers: []peer.ID{peers[1], peers[2]}, ops: []*SingleOp{gRoot}},
-		}},
-		mrand.NewSource(1))
+	u1 := NewMemoryIPNSLocalStorage()
+	u1.AddPeers("G1", peers[1], peers[2])
+	u1.AddOps("G1", root)
+	gs1 = NewGraphSychronizer(hosts[0], u1, mrand.NewSource(1))
 
-	gs2 = NewGraphSychronizer(hosts[1], []key.Key{"G1", "G2"},
-		&MockIPNSLocalStorage{Storage: map[key.Key]localStorageType{
-			key.Key("G1"): localStorageType{peers: []peer.ID{peers[0], peers[2]}, ops: []*SingleOp{gRoot, gChild}},
-			key.Key("G2"): localStorageType{peers: []peer.ID{peers[0], peers[2]}, ops: []*SingleOp{gRoot}},
-		}},
-		mrand.NewSource(2))
+	u2 := NewMemoryIPNSLocalStorage()
+	u2.AddPeers("G1", peers[0], peers[2])
+	u2.AddOps("G1", root, child)
+	u2.AddPeers("G2", peers[0], peers[2])
+	u2.AddOps("G2", root)
+	gs2 = NewGraphSychronizer(hosts[1], u2, mrand.NewSource(2))
 
-	gs3 = NewGraphSychronizer(hosts[2], []key.Key{"G2"},
-		&MockIPNSLocalStorage{Storage: map[key.Key]localStorageType{
-			key.Key("G2"): localStorageType{peers: []peer.ID{peers[0], peers[1]}, ops: []*SingleOp{gRoot, gChild}},
-		}},
-		mrand.NewSource(3))
+	u3 := NewMemoryIPNSLocalStorage()
+	u3.AddPeers("G2", peers[0], peers[1])
+	u3.AddOps("G2", root, child)
+	gs3 = NewGraphSychronizer(hosts[2], u3, mrand.NewSource(3))
+
 	return
 }
+
 func TestTwoGraphs(t *testing.T) {
-	gs1, gs2, gs3 := twoGraphTestBase(t)
+	gs1, gs2, gs3, err := twoGraphTestBase()
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	u1G1 := gs1.GetGraphProvider("G1")
 	u2G1 := gs2.GetGraphProvider("G1")
@@ -233,15 +210,18 @@ func TestTwoGraphs(t *testing.T) {
 	waitForGraphSize(u2G2, 3)
 }
 func TestTwoGraphsMWIPNS(t *testing.T) {
-	gs1, gs2, gs3 := twoGraphTestBase(t)
+	gs1, gs2, gs3, err := twoGraphTestBase()
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	u1G1 := gs1.GetGraphProvider("G1")
 	u2G2 := gs2.GetGraphProvider("G2")
 
-	ipnsU2G1 := &GossipMultiWriterIPNS{Gsync: gs2, IPNSKey: ipnsKey{key.Key("G1")}}
+	ipnsU2G1 := &GossipMultiWriterIPNS{Gsync: gs2, IPNSKey: ipnsKey(key.Key("G1"))}
 	ipnsU2G1.AddNewVersion(key.Key("102"), key.Key("101"))
 
-	ipnsU3G2 := &GossipMultiWriterIPNS{Gsync: gs3, IPNSKey: ipnsKey{key.Key("G2")}}
+	ipnsU3G2 := &GossipMultiWriterIPNS{Gsync: gs3, IPNSKey: ipnsKey(key.Key("G2"))}
 	ipnsU3G2.AddNewVersion(key.Key("102"), key.Key("101"))
 
 	waitForGraphSize(u1G1, 3)

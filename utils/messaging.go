@@ -15,7 +15,6 @@ import (
 type Message interface {
 	proto.Marshaler
 	proto.Unmarshaler
-	proto.Sizer
 }
 
 // RWMutex A structure containing separate read and write mutexes
@@ -30,6 +29,12 @@ type ProtectedStream struct {
 }
 
 const sizeLengthBytes = 8
+
+func NewProtectedStream(s net.Stream) ProtectedStream {
+	streamMux := &RWMutex{R: &sync.Mutex{}, W: &sync.Mutex{}}
+	ps := ProtectedStream{Stream: s, RWMutex: *streamMux}
+	return ps
+}
 
 // readNumBytesFromReader reads a specific number of bytes from a Reader, or returns an error
 func readNumBytesFromReader(r io.Reader, numBytes uint64) ([]byte, error) {
@@ -52,17 +57,20 @@ func ReadFromReader(r io.Reader, m Message, dbg string) error {
 	// Protocol: uint64 MessageLength followed by byte[] MarshalledMessage
 
 	sizeData, err := readNumBytesFromReader(r, sizeLengthBytes)
+	if err != nil {
+		return err
+	}
 	log.Printf("peer: %v | read | %v", dbg, sizeData)
 
 	size := binary.LittleEndian.Uint64(sizeData)
 	data, err := readNumBytesFromReader(r, size)
-	log.Printf("peer: %v | read | %v", dbg, data)
-
-	err = m.Unmarshal(data)
 	if err != nil {
 		return err
 	}
-	return nil
+	log.Printf("peer: %v | read | %v", dbg, data)
+
+	err = m.Unmarshal(data)
+	return err
 }
 
 func ReadFromProtectedStream(ps ProtectedStream, m Message) error {
@@ -84,12 +92,12 @@ func WriteToStream(s net.Stream, m Message) error {
 }
 
 func WriteToWriter(w io.Writer, m Message, dbg string) error {
-	size := m.Size()
 	data, err := m.Marshal()
-
 	if err != nil {
 		return errors.Wrap(err, "Could not Marshal data")
 	}
+
+	size := len(data)
 
 	// Protocol: uint64 MessageLength followed by byte[] MarshalledMessage
 	sizeData := make([]byte, sizeLengthBytes)
