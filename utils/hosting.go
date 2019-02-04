@@ -58,9 +58,11 @@ func MakeRoutedHost(listenPort int, priv crypto.PrivKey, bootstrapPeers []pstore
 	routedHost := rhost.Wrap(basicHost, dht)
 
 	// connect to the chosen ipfs nodes
-	err = bootstrapConnect(ctx, routedHost, bootstrapPeers)
-	if err != nil {
-		return nil, err
+	if len(bootstrapPeers) != 0 {
+		err = bootstrapConnect(ctx, routedHost, bootstrapPeers)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// Bootstrap the host
@@ -80,8 +82,6 @@ func MakeRoutedHost(listenPort int, priv crypto.PrivKey, bootstrapPeers []pstore
 	for _, addr := range addrs {
 		log.Println(addr.Encapsulate(hostAddr))
 	}
-
-	log.Printf("Now run \"./routed-echo -l %d -d %s\" on a different terminal\n", listenPort+1, routedHost.ID().Pretty())
 
 	return routedHost, nil
 }

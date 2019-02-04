@@ -28,13 +28,14 @@ Instead a Multi-Writer IPNS would have semantics such as:
 type DagNode interface {
     GetParents() []DagNode
     GetChildren() []DagNode
-    GetValue() Cid // Content format for the Cid is {ParentCids[], DataCid}
+    GetNodeID() cid.Cid // Content format for the Cid is {ParentCids[], DataCid}
+    GetValue() cid.Cid  // Returns the Cid of the content
 }
 
 type MultiWriterIPNS interface {
    Constructor(IPNS Key, IPFS instance)
 
-   AddNewVersion(prevCid, newCid)
+   AddNewVersion(prevCids, newCid)
    GetLatestVersionHistories() DagNode[] // Each DagNode returned represents one possible version of the data and the history leading up to it
 }
 
@@ -64,9 +65,9 @@ Some example data/operation structures to consider supporting include:
 
 * [x] Basic gossip system to allow for MW-IPNS communication
 * [x] Basic graph synchronization protocol (send all changes)
-* [ ] Expand gossip system to account for multiple simultaneous MW-IPNS synchronizations
-* [ ] Implement the 2 of the versioned content resolvers above
-* [ ] Create basic MW-IPNS pinner
+* [x] Expand gossip system to account for multiple simultaneous MW-IPNS synchronizations
+* [x] Implement 2 of the versioned content resolvers above
+* [x] Create basic MW-IPNS pinner
 * [ ] Harden gossip system and get reviews from some of the libp2p team
 
 ## Future Implementations

@@ -8,31 +8,31 @@
   },
   "gxDependencies": [
     {
-      "hash": "QmZChCsSt8DctjceaL56Eibc29CVQq4dGKRXC5JRZ6Ppae",
+      "hash": "QmcuXC5cxs79ro2cUuHs4HQ2bkDLJUYokwL8aivcX6HW3C",
       "name": "go-log",
-      "version": "1.5.7"
+      "version": "1.5.8"
     },
     {
-      "hash": "QmV6FjemM1K8oXjrvuq3wuVWWoU2TLDPmNnKrxHzY3v6Ai",
+      "hash": "QmQVUtnrNGtCRkCMpXgpApfzQjc8FDaDVxHqWH8cnZQeh5",
       "name": "go-multiaddr-net",
-      "version": "1.6.3"
+      "version": "1.6.6"
     },
     {
-      "hash": "QmYmsdtJ3HsodkePE3eU3TsCaP2YvPZJ4LoXnNkDE5Tpt7",
+      "hash": "QmRKLtwMw131aK7ugC3G7ybpumMz78YrJe5dzneyindvG1",
       "name": "go-multiaddr",
-      "version": "1.3.0"
+      "version": "1.3.6"
     },
     {
       "author": "whyrusleeping",
-      "hash": "QmNLzS18jsmwTxXewTm3YnZVLftWCeegNZEBFjMrnvnBrH",
+      "hash": "QmQSREHX6CMoPkT5FfuA4A9cWSFwoKY8RAzjf5m7Gpdtqu",
       "name": "go-libp2p-loggables",
-      "version": "1.1.22"
+      "version": "1.1.28"
     },
     {
       "author": "whyrusleeping",
-      "hash": "QmWtCpWB39Rzc2xTB75MKorsxNpo3TyecTEN24CJ3KVohE",
+      "hash": "QmZ9zH2FnLcxv1xyzFeUpDUeo55xEhZQHgveZijcxr7TLj",
       "name": "go-libp2p-peerstore",
-      "version": "2.0.4"
+      "version": "2.0.12"
     },
     {
       "author": "whyrusleeping",
@@ -42,45 +42,45 @@
     },
     {
       "author": "whyrusleeping",
-      "hash": "QmNfQbgBfARAtrYsBguChX6VJ5nbjeoYy1KdC36aaYWqG8",
+      "hash": "QmPuhRE325DR8ChNcFtgd6F1eANCHy1oohXZPpYop4xsK6",
       "name": "go-testutil",
-      "version": "1.2.8"
+      "version": "1.2.14"
     },
     {
       "author": "whyrusleeping",
-      "hash": "QmSTaEYUgDe1r581hxyd2u9582Hgp3KX4wGwYbRqz2u9Qh",
+      "hash": "QmPtFaR7BWHLAjSwLh9kXcyrgTzDpuhcWLkx8ioa9RMYnx",
       "name": "go-libp2p-net",
-      "version": "3.0.13"
+      "version": "3.0.21"
     },
     {
       "author": "whyrusleeping",
-      "hash": "Qmf5yHzmWAyHSJRPAmZzfk3Yd7icydBLi7eec5741aov7v",
+      "hash": "QmfD51tKgJiTMnW9JEiDiPwsCY4mqUoxkhKhBfyW12spTC",
       "name": "go-libp2p-host",
-      "version": "3.0.13"
+      "version": "3.0.20"
     },
     {
       "author": "whyrusleeping",
-      "hash": "QmPvyPwuCgJ7pDmrKDxRtsScJgBaM5h4EpRL2qQJsmXf4n",
+      "hash": "QmNiJiXwWE3kRhZrC5ej3kSjWHm337pYfhjLGSCDNKJP2s",
       "name": "go-libp2p-crypto",
-      "version": "2.0.1"
+      "version": "2.0.4"
     },
     {
       "author": "whyrusleeping",
-      "hash": "QmbNepETomvmXfz1X5pHNFD2QuPqnqi47dTd94QJWSorQ3",
+      "hash": "QmY5Grm8pJdiSSVsYxx4uNRgweY72EmYwuSDbRnbFok3iY",
       "name": "go-libp2p-peer",
-      "version": "2.3.8"
+      "version": "3.0.0"
     },
     {
       "author": "why",
-      "hash": "QmYfDsxmFGuMSdvFFgw5Ss9pD4YvTFWSFFXYT7LjtwKnY7",
+      "hash": "QmZNGvvTqtVtGzVxkhRCu5nuwbytdRdtHtJbWLGxeMYAkt",
       "name": "go-libp2p-interface-connmgr",
-      "version": "0.0.19"
+      "version": "0.3.28"
     },
     {
       "author": "whyrusleeping",
-      "hash": "QmaveCPGVaKJU57tBErGCDjzLaqEMZkFygoiv4BhYwWUGc",
+      "hash": "QmZsejKNkeFSQe5TcmYXJ8iq6qPL1FpsP4eAA8j7RfE7xg",
       "name": "go-smux-multiplex",
-      "version": "3.0.16"
+      "version": "3.0.17"
     },
     {
       "hash": "QmdxUuburamoF6zF9qjeQC4WYcWGbWuRmdLacMEsW8ioD8",
@@ -89,19 +89,29 @@
     },
     {
       "author": "whyrusleeping",
-      "hash": "QmPL3AKtiaQyYpchZceXBZhZ3MSnoGqJvLZrc7fzDTTQdJ",
+      "hash": "QmRBaUEQEeFWywfrZJ64QgsmvcqgLSK3VbvGMR2NM2Edpf",
       "name": "go-libp2p",
-      "version": "6.0.19"
+      "version": "6.0.28"
     },
     {
-      "hash": "QmSteomMgXnSQxLEY5UpxmkYAd8QF9JuLLeLYBokTHxFru",
+      "hash": "QmXbPygnUKAPMwseE5U3hQA7Thn59GVm7pQrhkFV63umT8",
       "name": "go-libp2p-kad-dht",
-      "version": "4.4.8"
+      "version": "4.4.17"
     },
     {
       "hash": "QmRoARq3nkUb13HSKZGepCZSWe5GrVPwx7xURJGZ7KWv9V",
       "name": "go-ipld-cbor",
       "version": "1.5.7"
+    },
+    {
+      "hash": "QmR8BauakNcBa3RbE4nbQu76PDiJgoQgz8AJdhJuiU4TAw",
+      "name": "go-cid",
+      "version": "0.9.1"
+    },
+    {
+      "hash": "QmVq2zWZjsm6UjoA42mWdL34xt326iYRCU69a572ng4su1",
+      "name": "go-ipfs-api",
+      "version": "1.4.5"
     }
   ],
   "gxVersion": "0.12.1",
@@ -111,4 +121,3 @@
   "releaseCmd": "git commit -a -m \"gx publish $VERSION\"",
   "version": "0.0.1-dev"
 }
-

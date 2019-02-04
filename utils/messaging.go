@@ -7,7 +7,6 @@ import (
 	net "github.com/libp2p/go-libp2p-net"
 	"github.com/pkg/errors"
 	"io"
-	"log"
 	"sync"
 )
 
@@ -60,14 +59,12 @@ func ReadFromReader(r io.Reader, m Message, dbg string) error {
 	if err != nil {
 		return err
 	}
-	log.Printf("peer: %v | read | %v", dbg, sizeData)
 
 	size := binary.LittleEndian.Uint64(sizeData)
 	data, err := readNumBytesFromReader(r, size)
 	if err != nil {
 		return err
 	}
-	log.Printf("peer: %v | read | %v", dbg, data)
 
 	err = m.Unmarshal(data)
 	return err
@@ -102,14 +99,12 @@ func WriteToWriter(w io.Writer, m Message, dbg string) error {
 	// Protocol: uint64 MessageLength followed by byte[] MarshalledMessage
 	sizeData := make([]byte, sizeLengthBytes)
 	binary.LittleEndian.PutUint64(sizeData, uint64(size))
-	log.Printf("peer: %v | write | %v", dbg, sizeData)
 
 	_, err = w.Write(sizeData)
 	if err != nil {
 		return errors.Wrap(err, "Error writing size of data to stream")
 	}
 
-	log.Printf("peer: %v | write | %v", dbg, data)
 	_, err = w.Write(data)
 
 	return errors.Wrap(err, "Error writing data to stream")
