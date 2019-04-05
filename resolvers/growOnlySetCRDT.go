@@ -133,7 +133,7 @@ func (mwSet *NamedMultiWriterStringSetCRDT) GetSet() map[string]struct{} {
 	}
 
 	//TODO: Is root.GetValue better than NodeID?
-	if root.GetValue() == mwSet.GraphManager.IPNSKey {
+	if root.GetValue() == mwSet.GraphManager.GetKey() {
 		for _, c := range root.GetChildren() {
 			recSetAdd(c)
 		}

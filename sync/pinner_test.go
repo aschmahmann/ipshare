@@ -78,6 +78,6 @@ func TestPinner(t *testing.T) {
 	grandChild := createAddNodeOp("102", child)
 	gp1.Update(grandChild)
 
-	pinnerGraph := user1sPinner.Synchronizer.GetGraphProvider(graphKey)
+	pinnerGraph := user1sPinner.Synchronizer.GetGraph(graphKey)
 	waitForGraphSize(pinnerGraph, 3)
 }

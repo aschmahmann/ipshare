@@ -1,23 +1,24 @@
 package sync
 
 import (
-	cid "github.com/ipfs/go-cid"
-	multihash "github.com/multiformats/go-multihash"
 	"log"
 	mrand "math/rand"
 	"strings"
 	testing "testing"
 	"time"
 
+	cid "github.com/ipfs/go-cid"
+	multihash "github.com/multiformats/go-multihash"
+
 	"github.com/aschmahmann/ipshare/testutils"
 )
 
-func waitForGraphSize(gp GraphProvider, graphSize int) {
+func waitForGraphSize(dag OperationDAG, graphSize int) {
 	c := make(chan bool)
 
 	go func() {
 		for {
-			if len(gp.GetOps()) >= graphSize {
+			if len(dag.GetOps()) >= graphSize {
 				c <- true
 			}
 			time.Sleep(time.Millisecond * 1000)
@@ -36,7 +37,7 @@ func waitForGraphSize(gp GraphProvider, graphSize int) {
 		return lst
 	}
 
-	for _, v := range gp.GetDagNodes() {
+	for _, v := range dag.GetDagNodes() {
 		op := v.GetAsOp()
 		children := mapToValueList(v.GetChildren())
 		log.Printf("ID: %v | Children %v | Parents %v", op.Value, children, op.Parents)
@@ -138,7 +139,7 @@ func TestOneSyncAndOneUpdate(t *testing.T) {
 	waitForGraphSize(gp1, 3)
 }
 
-func twoGraphTestBase() (gs1, gs2, gs3 GraphSynchronizer, graph1, graph2 cid.Cid, root, child *AddNodeOperation, err error) {
+func twoGraphTestBase() (gs1, gs2, gs3 AutomaticGraphSynchronizationManager, graph1, graph2 cid.Cid, root, child *AddNodeOperation, err error) {
 	reader := mrand.New(mrand.NewSource(mrand.Int63()))
 	hosts, peers, err := testutils.CreateHostAndPeers(reader, 10001, 3, true)
 
@@ -199,15 +200,15 @@ func TestTwoGraphsMWIPNS(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	u1G1 := gs1.GetGraphProvider(graph1)
-	u2G2 := gs2.GetGraphProvider(graph2)
+	u1G1 := gs1.GetGraph(graph1)
+	u2G2 := gs2.GetGraph(graph2)
 
 	newOp := createAddNodeOp("103", child)
 
-	ipnsU2G1 := &GossipMultiWriterIPNS{Gsync: gs2, IPNSKey: graph1}
+	ipnsU2G1 := NewGossipMultiWriterIPNS(graph1, gs2)
 	ipnsU2G1.AddNewVersion(newOp.Value, newOp.Parents...)
 
-	ipnsU3G2 := &GossipMultiWriterIPNS{Gsync: gs3, IPNSKey: graph2}
+	ipnsU3G2 := NewGossipMultiWriterIPNS(graph2, gs3)
 	ipnsU3G2.AddNewVersion(newOp.Value, newOp.Parents...)
 
 	waitForGraphSize(u1G1, 3)

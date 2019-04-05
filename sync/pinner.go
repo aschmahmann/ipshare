@@ -2,15 +2,16 @@ package sync
 
 import (
 	"context"
+	"log"
+	"math/rand"
+	"sync"
+
 	cid "github.com/ipfs/go-cid"
 	cbor "github.com/ipfs/go-ipld-cbor"
 	host "github.com/libp2p/go-libp2p-host"
 	net "github.com/libp2p/go-libp2p-net"
 	peer "github.com/libp2p/go-libp2p-peer"
 	protocol "github.com/libp2p/go-libp2p-protocol"
-	"log"
-	"math/rand"
-	"sync"
 
 	lutils "github.com/aschmahmann/ipshare/utils"
 )
@@ -18,7 +19,7 @@ import (
 // MWIPNSPinner handles node that can be registered with to persist MWIPNS structures
 type MWIPNSPinner struct {
 	mux          sync.Mutex
-	Synchronizer GraphSynchronizer
+	Synchronizer GraphSynchronizationManager
 	Storage      UpdateableIPNSLocalStorage
 }
 

@@ -2,11 +2,12 @@ package sync
 
 import (
 	fmt "fmt"
+	"log"
+
 	cid "github.com/ipfs/go-cid"
 	cbor "github.com/ipfs/go-ipld-cbor"
 	net "github.com/libp2p/go-libp2p-net"
 	"github.com/pkg/errors"
-	"log"
 
 	lutils "github.com/aschmahmann/ipshare/utils"
 )
@@ -15,6 +16,7 @@ func init() {
 	cbor.RegisterCborType(GSyncMessage{})
 	cbor.RegisterCborType(FullSendGSync{})
 	cbor.RegisterCborType(AddNodeOperation{})
+	cbor.RegisterCborType(RequestFullSendGSync{})
 }
 
 // GSyncMessage is the container for all messages in the gsync protocol
@@ -41,6 +43,7 @@ const (
 	UNKNOWN GSyncState = iota
 	FULL_GRAPH
 	UPDATE
+	REQUEST_FULL_GRAPH
 )
 
 // AddNodeOperation is the basic operation for adding a node to a DAG
@@ -75,7 +78,22 @@ func (msg *FullSendGSync) Unmarshal(mk []byte) error {
 	return cbor.DecodeInto(mk, msg)
 }
 
-func asyncGsyncReceiver(gs *defaultGraphSynchronizer, s net.Stream, done chan net.Stream) error {
+// FullSendGSync is a (large) message that sends a peer's full state about the graph being synchronized
+type RequestFullSendGSync struct {
+	GraphID *cid.Cid
+}
+
+// Marshal returns the byte representation of the object
+func (msg RequestFullSendGSync) Marshal() ([]byte, error) {
+	return cbor.DumpObject(msg)
+}
+
+// Unmarshal fills the structure with data from the bytes
+func (msg *RequestFullSendGSync) Unmarshal(mk []byte) error {
+	return cbor.DecodeInto(mk, msg)
+}
+
+func asyncGsyncReceiver(gs GraphSynchronizationManager, s net.Stream, done chan net.Stream) error {
 	ps := lutils.NewProtectedStream(s)
 
 	isDone := false
@@ -97,8 +115,6 @@ func asyncGsyncReceiver(gs *defaultGraphSynchronizer, s net.Stream, done chan ne
 		}
 	}()
 
-	var gp GraphProvider
-
 	gsyncMsg := &GSyncMessage{}
 	if err = lutils.ReadFromProtectedStream(ps, gsyncMsg); err != nil {
 		return errors.Wrap(err, "Could not read message from stream")
@@ -114,17 +130,34 @@ func asyncGsyncReceiver(gs *defaultGraphSynchronizer, s net.Stream, done chan ne
 		}
 
 		graphID := *typedMsg.GraphID
-		gs.mux.Lock()
-		graph, ok := gs.graphs[graphID]
-		gs.mux.Unlock()
-		gp = graph
 
-		if !ok {
-			err = fmt.Errorf("The Graph:%v could not be found by peer:%v", graphID, gs.host.ID())
+		graph := gs.GetGraph(graphID)
+
+		if graph == nil {
+			err = fmt.Errorf("The Graph:%v could not be found", graphID)
 			return err
 		}
 
-		gp.ReceiveUpdates(typedMsg.Operations...)
+		graph.ReceiveUpdates(typedMsg.Operations...)
+	case REQUEST_FULL_GRAPH:
+		typedMsg := &RequestFullSendGSync{}
+		if err = typedMsg.Unmarshal(gsyncMsg.Msg); err != nil {
+			return errors.Wrap(err, "Could not unmarshal message")
+		}
+
+		graphID := typedMsg.GraphID
+		graph := gs.GetGraph(*graphID)
+
+		msg := &FullSendGSync{GraphID: graphID, Operations: graph.GetOps()}
+		msgBytes, err := msg.Marshal()
+		if err != nil {
+			return err
+		}
+
+		gsynMsg := &GSyncMessage{MessageType: FULL_GRAPH, Msg: msgBytes}
+		if err = lutils.WriteToProtectedStream(ps, gsynMsg); err != nil {
+			return err
+		}
 	}
 
 	// After completing the initial synchronization indicate that it is completed

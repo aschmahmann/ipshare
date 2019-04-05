@@ -2,174 +2,46 @@ package sync
 
 import (
 	"context"
+	fmt "fmt"
+	"log"
+	mrand "math/rand"
+	"sync"
+	"time"
+
 	cid "github.com/ipfs/go-cid"
 	host "github.com/libp2p/go-libp2p-host"
 	net "github.com/libp2p/go-libp2p-net"
 	peer "github.com/libp2p/go-libp2p-peer"
 	protocol "github.com/libp2p/go-libp2p-protocol"
 	"github.com/pkg/errors"
-	"log"
-	mrand "math/rand"
-	"sync"
-	"time"
 
 	multihash "github.com/multiformats/go-multihash"
 
 	lutils "github.com/aschmahmann/ipshare/utils"
 )
 
-type setSyncGraphProvider struct {
+type opSetGraph struct {
 	mux     sync.Mutex
 	GraphID *cid.Cid
 
 	Root    DagNode
 	NodeSet map[cid.Cid]DagNode
-
-	updateStreams map[net.Stream]*lutils.RWMutex
-	peers         []peer.ID
-	host          host.Host
 }
 
-// DagNode is a DAG node where both the nodes and their content are described by Cids
-type DagNode interface {
-	GetNodeID() cid.Cid // Content format for the Cid is {ParentCids[], DataCid}
-	GetValue() cid.Cid  // Returns the Cid of the content
-	GetParents() map[cid.Cid]DagNode
-	GetChildren() map[cid.Cid]DagNode
-	AddChildren(...DagNode) int // Returns the number of children added
-	GetAsOp() *AddNodeOperation
+type setSyncGraphProvider struct {
+	opSetGraph
+
+	peers []peer.ID
+	host  host.Host
 }
 
-// OpBasedDagNode is a DAG node wherein every node is an operation on the graph's state
-type OpBasedDagNode struct {
-	nodeOp   *AddNodeOperation
-	Children map[cid.Cid]DagNode
-	Parents  map[cid.Cid]DagNode
-	nodeCID  cid.Cid
-}
-
-// AddChildren returns the number of children added
-func (node *OpBasedDagNode) AddChildren(nodes ...DagNode) int {
-	numAdds := 0
-	for _, n := range nodes {
-		childCid := n.GetNodeID()
-		if _, ok := node.Children[childCid]; !ok {
-			node.Children[childCid] = n
-			numAdds++
-		}
-	}
-	return numAdds
-}
-
-// GetChildren returns a map of Cid -> DagNode. Do not modify
-func (node *OpBasedDagNode) GetChildren() map[cid.Cid]DagNode {
-	return node.Children
-}
-
-// GetParents returns a map of Cid -> DagNode. Do not modify
-func (node *OpBasedDagNode) GetParents() map[cid.Cid]DagNode {
-	return node.Parents
-}
-
-// GetNodeID returns the Cid of the node (as opposed to the node's content)
-func (node *OpBasedDagNode) GetNodeID() cid.Cid {
-	return node.nodeCID
-}
-
-// GetValue returns the Cid of the node's value (as opposed to the node itself)
-func (node *OpBasedDagNode) GetValue() cid.Cid {
-	return *node.nodeOp.Value
-}
-
-// GetAsOp returns the operation that created the node
-func (node *OpBasedDagNode) GetAsOp() *AddNodeOperation {
-	return node.nodeOp
-}
-
-// GraphSynchronizer manages the synchronization of multiple graphs
-type GraphSynchronizer interface {
-	GetGraphProvider(IPNSKey cid.Cid) GraphProvider
-	AddGraph(IPNSKey cid.Cid)
-	RemoveGraph(IPNSKey cid.Cid)
-}
-
-// MultiWriterIPNS supports multiwriter modification of an object where the modifications are represented by DAG nodes containing Cids of operations on the object
-type MultiWriterIPNS interface {
-	AddNewVersion(newCid *cid.Cid, prevCids ...*cid.Cid)
-	GetLatestVersionHistories() []DagNode // Each DagNode returned represents one possible version of the data and the history leading up to it
-}
-
-// GossipMultiWriterIPNS provides a MultiWriterIPNS layer on top of a GraphSynchronizer
-type GossipMultiWriterIPNS struct {
-	IPNSKey    cid.Cid
-	Gsync      GraphSynchronizer
-	branchEnds []DagNode
-}
-
-// AddNewVersion modify the object into a new version based on the previous modifications it depends on
-func (ipns *GossipMultiWriterIPNS) AddNewVersion(newCid *cid.Cid, prevCids ...*cid.Cid) {
-	ipns.Gsync.GetGraphProvider(ipns.IPNSKey).Update(&AddNodeOperation{Value: newCid, Parents: prevCids})
-}
-
-// GetRoot returns the root DagNode
-func (ipns *GossipMultiWriterIPNS) GetRoot() DagNode {
-	gp := ipns.Gsync.GetGraphProvider(ipns.IPNSKey)
-	node := gp.GetRoot()
-	return node
-}
-
-// GetNumberOfOperations returns the number of Dag nodes/operations processed
-func (ipns *GossipMultiWriterIPNS) GetNumberOfOperations() int {
-	gp := ipns.Gsync.GetGraphProvider(ipns.IPNSKey)
-	nodes := gp.GetDagNodes()
-	return len(nodes)
-}
-
-// GetLatestVersionHistories Each DagNode returned represents one possible version of the data and the history leading up to it
-func (ipns *GossipMultiWriterIPNS) GetLatestVersionHistories() []DagNode {
-	gp := ipns.Gsync.GetGraphProvider(ipns.IPNSKey)
-	node := gp.GetRoot()
-	visted := make(map[DagNode]struct{})
-	visted[node] = struct{}{}
-	return getLeafNodes(node, visted)
-}
-
-func getLeafNodes(root DagNode, visted map[DagNode]struct{}) []DagNode {
-	// Use a recursive DFS with a visited set to prevent walking down the same path multiple times
-	children := root.GetChildren()
-	if len(children) == 0 {
-		return []DagNode{root}
-	}
-
-	leaves := make([]DagNode, 0, len(children))
-	for _, c := range children {
-		if _, ok := visted[c]; ok {
-			continue
-		}
-		visted[c] = struct{}{}
-
-		childLeaves := getLeafNodes(c, visted)
-		leaves = append(leaves, childLeaves...)
-	}
-	return leaves
-}
-
-// GraphProvider Manages a graph of operations, including broadcasting and receiving updates
-type GraphProvider interface {
-	ReceiveUpdates(...*AddNodeOperation)
-	Update(*AddNodeOperation)
-	GetOps() []*AddNodeOperation
-	GetDagNodes() []DagNode
-	GetRoot() DagNode
-}
-
-func (gp *setSyncGraphProvider) ReceiveUpdates(ops ...*AddNodeOperation) {
+func (gp *opSetGraph) ReceiveUpdates(ops ...*AddNodeOperation) {
 	gp.mux.Lock()
 	gp.internalUpdate(ops...)
 	gp.mux.Unlock()
 }
 
-func (gp *setSyncGraphProvider) internalUpdate(ops ...*AddNodeOperation) {
+func (gp *opSetGraph) internalUpdate(ops ...*AddNodeOperation) {
 	for _, op := range ops {
 
 		builder := cid.V1Builder{Codec: cid.Raw, MhType: multihash.SHA2_256, MhLength: -1}
@@ -253,7 +125,7 @@ func (gp *setSyncGraphProvider) internalUpdate(ops ...*AddNodeOperation) {
 	}
 }
 
-func (gp *setSyncGraphProvider) printNodes() {
+func (gp *opSetGraph) printNodes() {
 	pp := func(d DagNode) []string {
 		par := d.GetParents()
 		ret := make([]string, len(par))
@@ -269,15 +141,27 @@ func (gp *setSyncGraphProvider) printNodes() {
 	}
 }
 
-func (gp *setSyncGraphProvider) Update(op *AddNodeOperation) {
-	gp.mux.Lock()
-	gp.internalUpdate(op)
-
-	gp.mux.Unlock()
-	gp.sendFullUpdate()
+func (gp *opSetGraph) AddNewVersion(newCid *cid.Cid, prevCids ...*cid.Cid) {
+	gp.ReceiveUpdates(&AddNodeOperation{Value: newCid, Parents: prevCids})
 }
 
-func (gp *setSyncGraphProvider) GetOps() []*AddNodeOperation {
+func (gp *opSetGraph) GetLatestVersionHistories() []DagNode {
+	node := gp.GetRoot()
+	visted := make(map[DagNode]struct{})
+	visted[node] = struct{}{}
+	return getLeafNodes(node, visted)
+}
+
+func (gp *setSyncGraphProvider) Update(op *AddNodeOperation) {
+	gp.ReceiveUpdates(op)
+	SendFullGraph(gp, gp.GraphID, gp.host, gp.peers)
+}
+
+func (gp *setSyncGraphProvider) SyncGraph() {
+	SendFullGraph(gp, gp.GraphID, gp.host, gp.peers)
+}
+
+func (gp *opSetGraph) GetOps() []*AddNodeOperation {
 	gp.mux.Lock()
 	numOps := len(gp.NodeSet)
 	ops := make([]*AddNodeOperation, numOps)
@@ -312,20 +196,70 @@ func dfsTopologicalSort(n DagNode, ts []*AddNodeOperation, index *int, found map
 	return nil
 }
 
-func (gp *setSyncGraphProvider) GetDagNodes() []DagNode {
+func (gp *opSetGraph) GetDagNodes() map[cid.Cid]DagNode {
+	ops := make(map[cid.Cid]DagNode)
 	gp.mux.Lock()
-	ops := make([]DagNode, len(gp.NodeSet))
-	i := 0
-	for _, v := range gp.NodeSet {
-		ops[i] = v
-		i++
+	for k, v := range gp.NodeSet {
+		ops[k] = v
 	}
 	gp.mux.Unlock()
 	return ops
 }
 
-func (gp *setSyncGraphProvider) GetRoot() DagNode {
+func (gp *opSetGraph) TryGetNode(nodeID cid.Cid) (DagNode, bool) {
+	gp.mux.Lock()
+	node, found := gp.NodeSet[nodeID]
+	gp.mux.Unlock()
+	return node, found
+}
+
+func (gp *opSetGraph) GetRoot() DagNode {
 	return gp.Root
+}
+
+func SendFullGraph(gp OperationDAG, graphID *cid.Cid, ha host.Host, peers []peer.ID) int {
+	// Send full graph to all of our peers so they can incorporate our changes
+	waiting := make(chan error, len(peers))
+
+	ops := gp.GetOps()
+	for _, p := range peers {
+		peer := p
+		if peer == ha.ID() {
+			waiting <- errors.New("Tried to connect to self peer")
+			continue
+		}
+
+		s, err := ha.NewStream(context.Background(), peer, gsyncProtocolID)
+		if err != nil {
+			waiting <- err
+			continue
+		}
+		ps := lutils.NewProtectedStream(s)
+		defer ps.Close()
+
+		msg := &FullSendGSync{GraphID: graphID, Operations: ops}
+		msgBytes, err := msg.Marshal()
+		if err != nil {
+			waiting <- err
+			continue
+		}
+
+		gsynMsg := &GSyncMessage{MessageType: FULL_GRAPH, Msg: msgBytes}
+		if err = lutils.WriteToProtectedStream(ps, gsynMsg); err != nil {
+			waiting <- err
+			continue
+		}
+		waiting <- nil
+	}
+
+	peersUpdated := 0
+	for range peers {
+		err := <-waiting
+		if err == nil {
+			peersUpdated++
+		}
+	}
+	return peersUpdated
 }
 
 // IPNSLocalStorage is a read interface for data that an MWIPNS node might need
@@ -405,15 +339,26 @@ func (ls *memoryIPNSLocalStorage) AddOps(IPNSKey cid.Cid, ops ...*AddNodeOperati
 }
 
 type defaultGraphSynchronizer struct {
-	mux     sync.RWMutex
-	host    host.Host
-	graphs  map[cid.Cid]GraphProvider
-	storage IPNSLocalStorage
-	rng     *mrand.Rand
+	mux           sync.RWMutex
+	host          host.Host
+	graphs        map[cid.Cid]GraphProvider
+	graphUpdaters map[cid.Cid]GraphUpdater
+	storage       IPNSLocalStorage
+	rng           *mrand.Rand
 }
 
 func (gs *defaultGraphSynchronizer) GetGraphProvider(IPNSKey cid.Cid) GraphProvider {
-	return gs.graphs[IPNSKey]
+	gs.mux.RLock()
+	graph, ok := gs.graphs[IPNSKey]
+	gs.mux.RUnlock()
+	if !ok {
+		return nil
+	}
+	return graph
+}
+
+func (gs *defaultGraphSynchronizer) GetGraph(IPNSKey cid.Cid) OperationDAG {
+	return gs.GetGraphProvider(IPNSKey)
 }
 
 const gsyncProtocolID = protocol.ID("/gsync/1.0.0")
@@ -435,68 +380,21 @@ func (gs *defaultGraphSynchronizer) AddGraph(IPNSKey cid.Cid) {
 
 	peerIDs := gs.storage.GetPeers(IPNSKey)
 
-	newGP := &setSyncGraphProvider{GraphID: &IPNSKey, NodeSet: make(map[cid.Cid]DagNode),
-		updateStreams: make(map[net.Stream]*lutils.RWMutex), host: gs.host}
+	newGP := &setSyncGraphProvider{opSetGraph: opSetGraph{GraphID: &IPNSKey, NodeSet: make(map[cid.Cid]DagNode)}, host: gs.host}
 	if len(startOps) > 0 {
 		newGP.ReceiveUpdates(startOps...)
 	}
 	gs.graphs[IPNSKey] = newGP
 	newGP.peers = peerIDs
 
-	newGP.sendFullUpdate()
+	SendFullGraph(newGP, newGP.GraphID, newGP.host, newGP.peers)
 
 	ticker := time.NewTicker(500 * time.Millisecond)
 	go func() {
 		for range ticker.C {
-			newGP.sendFullUpdate()
+			SendFullGraph(newGP, newGP.GraphID, newGP.host, newGP.peers)
 		}
 	}()
-}
-
-func (gp *setSyncGraphProvider) sendFullUpdate() int {
-	// Send full graph to all of our peers so they can incorporate our changes
-	// TODO: May not need to create connectections to all peers, just a subset
-	waiting := make(chan error, len(gp.peers))
-
-	ops := gp.GetOps()
-	for _, p := range gp.peers {
-		peer := p
-		if peer == gp.host.ID() {
-			waiting <- errors.New("Tried to connect to self peer")
-			continue
-		}
-
-		s, err := gp.host.NewStream(context.Background(), peer, gsyncProtocolID)
-		if err != nil {
-			waiting <- err
-			continue
-		}
-		ps := lutils.NewProtectedStream(s)
-		defer ps.Close()
-
-		msg := &FullSendGSync{GraphID: gp.GraphID, Operations: ops}
-		msgBytes, err := msg.Marshal()
-		if err != nil {
-			waiting <- err
-			continue
-		}
-
-		gsynMsg := &GSyncMessage{MessageType: FULL_GRAPH, Msg: msgBytes}
-		if err = lutils.WriteToProtectedStream(ps, gsynMsg); err != nil {
-			waiting <- err
-			continue
-		}
-		waiting <- nil
-	}
-
-	peersUpdated := 0
-	for range gp.peers {
-		err := <-waiting
-		if err == nil {
-			peersUpdated++
-		}
-	}
-	return peersUpdated
 }
 
 //TODO: Cancel gsync if it is running
@@ -506,8 +404,12 @@ func (gs *defaultGraphSynchronizer) RemoveGraph(IPNSKey cid.Cid) {
 	gs.mux.Unlock()
 }
 
-//NewGraphSychronizer Creates a GraphSynchronizer that manages the updates to a graph
-func NewGraphSychronizer(ha host.Host, storage IPNSLocalStorage, rngSrc mrand.Source) GraphSynchronizer {
+func (gs *defaultGraphSynchronizer) SyncGraph(IPNSKey *cid.Cid) {
+	gs.GetGraphProvider(*IPNSKey).SyncGraph()
+}
+
+//NewGraphSychronizer Creates a GraphSynchronizationManager that manages the updates to the graphs
+func NewGraphSychronizer(ha host.Host, storage IPNSLocalStorage, rngSrc mrand.Source) AutomaticGraphSynchronizationManager {
 	// Create a pseudorandom number generator from the given pseudorandom source
 	rng := mrand.New(rngSrc)
 
@@ -523,4 +425,102 @@ func NewGraphSychronizer(ha host.Host, storage IPNSLocalStorage, rngSrc mrand.So
 	})
 
 	return gs
+}
+
+func NewManualGraphSychronizer(ha host.Host) ManualGraphSynchronizationManager {
+	gs := &manualGraphSynchronizer{
+		host:   ha,
+		graphs: make(map[cid.Cid]OperationDAG),
+	}
+
+	// Setup incoming gsync connections to perform gsync
+	ha.SetStreamHandler(protocol.ID("/gsync/1.0.0"), func(s net.Stream) {
+		go asyncGsyncReceiver(gs, s, make(chan net.Stream, 1))
+	})
+
+	return gs
+}
+
+type manualGraphSynchronizer struct {
+	mux    sync.RWMutex
+	host   host.Host
+	graphs map[cid.Cid]OperationDAG
+}
+
+func (gs *manualGraphSynchronizer) GetGraph(IPNSKey cid.Cid) OperationDAG {
+	gs.mux.RLock()
+	graph, ok := gs.graphs[IPNSKey]
+	gs.mux.RUnlock()
+	if !ok {
+		return nil
+	}
+	return graph
+}
+
+func (gs *manualGraphSynchronizer) AddGraph(IPNSKey cid.Cid) {
+	gs.mux.Lock()
+	defer gs.mux.Unlock()
+
+	if _, ok := gs.graphs[IPNSKey]; ok {
+		return
+	}
+
+	graph := &opSetGraph{GraphID: &IPNSKey, NodeSet: make(map[cid.Cid]DagNode)}
+	graph.ReceiveUpdates(&AddNodeOperation{Parents: []*cid.Cid{}, Value: &IPNSKey})
+	gs.graphs[IPNSKey] = graph
+}
+
+//TODO: Cancel gsync if it is running
+func (gs *manualGraphSynchronizer) RemoveGraph(IPNSKey cid.Cid) {
+	gs.mux.Lock()
+	delete(gs.graphs, IPNSKey)
+	gs.mux.Unlock()
+}
+
+func (gs *manualGraphSynchronizer) SyncGraph(IPNSKey *cid.Cid, peerID peer.ID) {
+	if gs.host.ID() == peerID {
+		return
+	}
+
+	s, err := gs.host.NewStream(context.Background(), peerID, gsyncProtocolID)
+	if err != nil {
+		panic(err)
+	}
+
+	ps := lutils.NewProtectedStream(s)
+	defer ps.Close()
+
+	msg := &RequestFullSendGSync{GraphID: IPNSKey}
+	msgBytes, err := msg.Marshal()
+	if err != nil {
+		panic(err)
+	}
+
+	gsyncMsg := &GSyncMessage{MessageType: REQUEST_FULL_GRAPH, Msg: msgBytes}
+	if err = lutils.WriteToProtectedStream(ps, gsyncMsg); err != nil {
+		panic(err)
+	}
+
+	returnMsg := &GSyncMessage{}
+	if err := lutils.ReadFromProtectedStream(ps, returnMsg); err != nil {
+		panic(err)
+	}
+
+	typedMsg := &FullSendGSync{}
+	if err := typedMsg.Unmarshal(gsyncMsg.Msg); err != nil {
+		panic(errors.Wrap(err, "Could not unmarshal message"))
+	}
+
+	graphID := *typedMsg.GraphID
+
+	graph := gs.GetGraph(graphID)
+
+	if graph == nil {
+		err = fmt.Errorf("The Graph:%v could not be found", graphID)
+		panic(err)
+	}
+
+	graph.ReceiveUpdates(typedMsg.Operations...)
+
+	//SendFullGraph(gs.GetGraph(*IPNSKey), IPNSKey, gs.host, []peer.ID{peerID})
 }
