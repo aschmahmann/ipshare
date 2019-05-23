@@ -115,6 +115,7 @@ func (mc *MWMessageCache) Shift() {}
 
 type SyncGossipConfiguration struct {
 	mcache             SynchronizeCompatibleMessageCacher
+	emitter            pubsub.EmittingStrategy
 	supportedProtocols []protocol.ID
 	protocol           protocol.ID
 	syncMgr            ManualGraphSynchronizationManager
@@ -132,7 +133,7 @@ func (gs *SyncGossipConfiguration) Protocol() protocol.ID {
 	return gs.protocol
 }
 
-func (gs *SyncGossipConfiguration) Publish(rt *pubsub.GossipConfigurableRouter, from peer.ID, msg *pb.Message) {
+func (gs *SyncGossipConfiguration) Publish(rt *pubsub.GossipSubRouter, from peer.ID, msg *pb.Message) {
 	topicsToSync := gs.mcache.Put(msg)
 
 	calculatedFrom := peer.ID(msg.GetFrom())
@@ -164,9 +165,17 @@ func (gs *SyncGossipConfiguration) Publish(rt *pubsub.GossipConfigurableRouter, 
 	}
 }
 
+func (gs *SyncGossipConfiguration) GetEmitPeers(topicPeers pubsub.GetFilteredPeers, meshPeers map[peer.ID]struct{}) map[peer.ID]struct{} {
+	return gs.emitter.GetEmitPeers(topicPeers, meshPeers)
+}
+
+func (gs *SyncGossipConfiguration) OnGraft(rt *pubsub.GossipSubRouter, topic string, peer peer.ID) {
+	rt.RequestMessage(topic, peer)
+}
+
 // NewGossipBaseSub returns a new PubSub object using GossipSubRouter as the router.
 func NewGossipSyncMW(ctx context.Context, h host.Host, mcache *MWMessageCache, protocolID protocol.ID, opts ...pubsub.Option) (*pubsub.PubSub, error) {
-	rt := pubsub.NewGossipConfigurableRouter(&SyncGossipConfiguration{
+	rt := pubsub.NewGossipSubRouterWithStrategies(&SyncGossipConfiguration{
 		mcache:             mcache,
 		supportedProtocols: []protocol.ID{protocolID},
 		protocol:           protocolID,
@@ -193,8 +202,9 @@ func NewGossipSyncMWIPNS(ctx context.Context, h host.Host, opts ...pubsub.Option
 		cidBuilder: cidbuilder,
 		syncMgr:    graphSynchronizer,
 	}
-	rt := pubsub.NewGossipConfigurableRouter(&SyncGossipConfiguration{
+	rt := pubsub.NewGossipSubRouterWithStrategies(&SyncGossipConfiguration{
 		mcache:             mcache,
+		emitter:            pubsub.NewRandomPeersStrategy(pubsub.GossipSubD),
 		supportedProtocols: []protocol.ID{protocolID},
 		protocol:           protocolID,
 		syncMgr:            graphSynchronizer,

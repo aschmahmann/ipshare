@@ -16,6 +16,10 @@ import (
 	multihash "github.com/multiformats/go-multihash"
 
 	lutils "github.com/aschmahmann/ipshare/utils"
+
+	bhost "github.com/libp2p/go-libp2p-blankhost"
+	swarmt "github.com/libp2p/go-libp2p-swarm/testing"
+	"testing"
 )
 
 func createHost(rnd *mrand.Rand, portNum int) (host.Host, error) {
@@ -32,6 +36,46 @@ func createHost(rnd *mrand.Rand, portNum int) (host.Host, error) {
 	}
 
 	return ha, nil
+}
+
+func getNetHosts(t *testing.T, ctx context.Context, n int) []host.Host {
+	var out []host.Host
+
+	for i := 0; i < n; i++ {
+		netw := swarmt.GenSwarm(t, ctx)
+		h := bhost.NewBlankHost(netw)
+		out = append(out, h)
+	}
+
+	return out
+}
+
+func CreateHostAndPeersTest(t *testing.T, rnd *mrand.Rand, numHosts int, printPeers bool) ([]host.Host, []peer.ID, error) {
+	var hosts []host.Host
+	var peers []peer.ID
+
+	hosts = getNetHosts(t, context.Background(), numHosts+1)
+	hBase := hosts[0]
+
+	hBasePeerInfo := peerstore.PeerInfo{Addrs: hBase.Addrs(), ID: hBase.ID()}
+
+	for i := 0; i < numHosts; i++ {
+		h := hosts[i+1]
+		err := h.Connect(context.Background(), hBasePeerInfo)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		peers = append(peers, h.ID())
+	}
+
+	if printPeers {
+		for i, p := range peers {
+			log.Printf("peer%v: %v", i, p)
+		}
+	}
+
+	return hosts[1:], peers, nil
 }
 
 func CreateHostAndPeers(rnd *mrand.Rand, startPort, numHosts int, printPeers bool) ([]host.Host, []peer.ID, error) {
