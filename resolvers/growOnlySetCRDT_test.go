@@ -5,36 +5,34 @@ import (
 	"testing"
 	"time"
 
-	cid "github.com/ipfs/go-cid"
 	ipfsApi "github.com/ipfs/go-ipfs-api"
 
 	gsync "github.com/aschmahmann/ipshare/sync"
-	testutils "github.com/aschmahmann/ipshare/testutils"
 )
 
 func TestGWSetCRDT(t *testing.T) {
 	reader := mrand.New(mrand.NewSource(mrand.Int63()))
-	graphKey := testutils.CreateCid("GWSetCRDT")
+	graphID := "GWSetCRDT"
 
-	gsArr, err := createFullyConnectedGsync(reader, 2, graphKey)
+	gsArr, err := createFullyConnectedGsync(reader, 2, graphID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	BaseTestGWSetCRDT(t, graphKey, gsArr)
+	BaseTestGWSetCRDT(t, gsArr)
 }
 
 func TestGWSetCRDTOverPubSub(t *testing.T) {
 	reader := mrand.New(mrand.NewSource(mrand.Int63()))
-	graphKey := testutils.CreateCid("GWSetCRDT")
+	graphID := "GWSetCRDT"
 
-	gsArr, err := createFullyConnectedPubSubMWIPNS(reader, 2, graphKey)
+	gsArr, err := createFullyConnectedPubSubMWIPNS(reader, 2, graphID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	BaseTestGWSetCRDT(t, graphKey, gsArr)
+	BaseTestGWSetCRDT(t, gsArr)
 }
 
-func BaseTestGWSetCRDT(t *testing.T, graphKey cid.Cid, gsArr []gsync.GossipMultiWriterIPNS) {
+func BaseTestGWSetCRDT(t *testing.T, gsArr []gsync.GossipMultiWriterIPNS) {
 	ipfsShell := &LockedIPFS{Ipfs: ipfsApi.NewLocalShell()}
 
 	set1 := &NamedMultiWriterStringSetCRDT{GraphManager: gsArr[0], Ipfs: ipfsShell, Set: make(map[string]struct{})}

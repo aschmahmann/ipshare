@@ -5,7 +5,7 @@ import cid "github.com/ipfs/go-cid"
 // GSMultiWriterIPNS provides a MultiWriterIPNS layer on top of a GraphSynchronizer
 type GSMultiWriterIPNS struct {
 	BasicMWIPNS
-	IPNSKey cid.Cid
+	GraphID string
 	Gsync   GraphSynchronizationManager
 }
 
@@ -13,21 +13,21 @@ type GossipMultiWriterIPNS interface {
 	MultiWriterIPNS
 	GetRoot() DagNode
 	GetNumberOfOperations() int
-	GetKey() cid.Cid
+	GetKey() string
 }
 
-func NewGossipMultiWriterIPNS(IPNSKey cid.Cid, Gsync GraphSynchronizationManager) GossipMultiWriterIPNS {
+func NewGossipMultiWriterIPNS(graphID string, Gsync GraphSynchronizationManager) GossipMultiWriterIPNS {
 	return &GSMultiWriterIPNS{
 		BasicMWIPNS: BasicMWIPNS{
-			graph: Gsync.GetGraph(IPNSKey),
+			graph: Gsync.GetGraph(graphID),
 		},
-		IPNSKey: IPNSKey,
+		GraphID: graphID,
 		Gsync:   Gsync,
 	}
 }
 
-func (ipns *GSMultiWriterIPNS) GetKey() cid.Cid {
-	return ipns.IPNSKey
+func (ipns *GSMultiWriterIPNS) GetKey() string {
+	return ipns.GraphID
 }
 
 type BasicMWIPNS struct {

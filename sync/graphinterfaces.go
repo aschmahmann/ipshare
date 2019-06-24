@@ -25,20 +25,20 @@ type GraphProvider interface {
 
 // GraphSynchronizationManager manages the synchronization of multiple graphs
 type GraphSynchronizationManager interface {
-	GetGraph(IPNSKey cid.Cid) OperationDAG
-	AddGraph(IPNSKey cid.Cid)
-	RemoveGraph(IPNSKey cid.Cid)
+	GetGraph(graphID string) OperationDAG
+	AddGraph(graphID string)
+	RemoveGraph(graphID string)
 }
 
 type AutomaticGraphSynchronizationManager interface {
 	GraphSynchronizationManager
-	SyncGraph(IPNSKey *cid.Cid)
-	GetGraphProvider(IPNSKey cid.Cid) GraphProvider
+	SyncGraph(graphID string)
+	GetGraphProvider(graphID string) GraphProvider
 }
 
 type ManualGraphSynchronizationManager interface {
 	GraphSynchronizationManager
-	SyncGraph(IPNSKey *cid.Cid, peer peer.ID)
+	SyncGraph(graphID string, peer peer.ID)
 }
 
 // MultiWriterIPNS supports multiwriter modification of an object where the modifications are represented by DAG nodes containing Cids of operations on the object

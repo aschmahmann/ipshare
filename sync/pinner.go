@@ -2,7 +2,6 @@ package sync
 
 import (
 	"context"
-	"log"
 	"math/rand"
 	"sync"
 
@@ -25,7 +24,7 @@ type MWIPNSPinner struct {
 
 // RegisterGraph is the RPC structure for registering an append-only DAG with an MWIPNSPinner
 type RegisterGraph struct {
-	GraphID cid.Cid
+	GraphID string
 	RootCID cid.Cid
 	Peers   []peer.ID
 }
@@ -59,7 +58,7 @@ func NewPinner(h host.Host) *MWIPNSPinner {
 		err := lutils.ReadFromProtectedStream(ps, rpc)
 
 		if err != nil {
-			log.Print(err)
+			log.Info(err)
 			return
 		}
 
@@ -80,14 +79,14 @@ type RemotePinner struct {
 }
 
 // RegisterGraph registers a graph with the MWIPNSPinner
-func (pinner *RemotePinner) RegisterGraph(graphID cid.Cid, peers []peer.ID) error {
+func (pinner *RemotePinner) RegisterGraph(graphID string, rootCid cid.Cid, peers []peer.ID) error {
 	s, err := pinner.caller.NewStream(context.Background(), pinner.ID, pinnerProtocolID)
 	if err != nil {
 		return err
 	}
 
 	ps := lutils.NewProtectedStream(s)
-	if err = lutils.WriteToProtectedStream(ps, &RegisterGraph{GraphID: graphID, Peers: peers, RootCID: graphID}); err != nil {
+	if err = lutils.WriteToProtectedStream(ps, &RegisterGraph{GraphID: graphID, Peers: peers, RootCID: rootCid}); err != nil {
 		return err
 	}
 

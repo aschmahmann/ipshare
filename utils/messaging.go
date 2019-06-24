@@ -49,10 +49,10 @@ func readNumBytesFromReader(r io.Reader, numBytes uint64) ([]byte, error) {
 
 func ReadFromStream(s net.Stream, m Message) error {
 	buf := bufio.NewReader(s)
-	return ReadFromReader(buf, m, s.Conn().LocalPeer().String())
+	return ReadFromReader(buf, m)
 }
 
-func ReadFromReader(r io.Reader, m Message, dbg string) error {
+func ReadFromReader(r io.Reader, m Message) error {
 	// Protocol: uint64 MessageLength followed by byte[] MarshalledMessage
 
 	sizeData, err := readNumBytesFromReader(r, sizeLengthBytes)
@@ -85,10 +85,10 @@ func WriteToProtectedStream(ps ProtectedStream, m Message) error {
 }
 
 func WriteToStream(s net.Stream, m Message) error {
-	return WriteToWriter(s, m, s.Conn().LocalPeer().String())
+	return WriteToWriter(s, m)
 }
 
-func WriteToWriter(w io.Writer, m Message, dbg string) error {
+func WriteToWriter(w io.Writer, m Message) error {
 	data, err := m.Marshal()
 	if err != nil {
 		return errors.Wrap(err, "Could not Marshal data")

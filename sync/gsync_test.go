@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"log"
 	mrand "math/rand"
 	"strings"
 	testing "testing"
@@ -40,7 +39,7 @@ func waitForGraphSize(dag OperationDAG, graphSize int) {
 	for _, v := range dag.GetDagNodes() {
 		op := v.GetAsOp()
 		children := mapToValueList(v.GetChildren())
-		log.Printf("ID: %v | Children %v | Parents %v", op.Value, children, op.Parents)
+		log.Infof("ID: %v | Children %v | Parents %v", op.Value, children, op.Parents)
 	}
 }
 
@@ -49,7 +48,7 @@ func printDag(t *testing.T, n DagNode, level int) {
 	if level != 0 {
 		spaces = spaces + "->"
 	}
-	log.Printf("%v%v", spaces, n.GetAsOp().Value)
+	log.Infof("%v%v", spaces, n.GetAsOp().Value)
 	for _, parent := range n.GetParents() {
 		printDag(t, parent, level+1)
 	}
@@ -84,23 +83,23 @@ func baseTestOneChangeGraphSync() (graph1, graph2 GraphProvider, root, child *Ad
 		return
 	}
 
-	graphKey := testutils.CreateCid("TestGraph")
+	graphID := "TestGraph"
 
 	root = createAddNodeOp("100")
 	child = createAddNodeOp("101", root)
 
 	u1 := NewMemoryIPNSLocalStorage()
-	u1.AddPeers(graphKey, peers[1])
-	u1.AddOps(graphKey, root)
+	u1.AddPeers(graphID, peers[1])
+	u1.AddOps(graphID, root)
 	gs1 := NewGraphSychronizer(hosts[0], u1, mrand.NewSource(1))
 
 	u2 := NewMemoryIPNSLocalStorage()
-	u2.AddPeers(graphKey, peers[0])
-	u2.AddOps(graphKey, root, child)
+	u2.AddPeers(graphID, peers[0])
+	u2.AddOps(graphID, root, child)
 	gs2 := NewGraphSychronizer(hosts[1], u2, mrand.NewSource(2))
 
-	graph1 = gs1.GetGraphProvider(graphKey)
-	graph2 = gs2.GetGraphProvider(graphKey)
+	graph1 = gs1.GetGraphProvider(graphID)
+	graph2 = gs2.GetGraphProvider(graphID)
 	return
 }
 func TestOneChangeGraphSync(t *testing.T) {
@@ -139,7 +138,7 @@ func TestOneSyncAndOneUpdate(t *testing.T) {
 	waitForGraphSize(gp1, 3)
 }
 
-func twoGraphTestBase() (gs1, gs2, gs3 AutomaticGraphSynchronizationManager, graph1, graph2 cid.Cid, root, child *AddNodeOperation, err error) {
+func twoGraphTestBase() (gs1, gs2, gs3 AutomaticGraphSynchronizationManager, graph1, graph2 string, root, child *AddNodeOperation, err error) {
 	reader := mrand.New(mrand.NewSource(mrand.Int63()))
 	hosts, peers, err := testutils.CreateHostAndPeers(reader, 10001, 3, true)
 
@@ -147,8 +146,8 @@ func twoGraphTestBase() (gs1, gs2, gs3 AutomaticGraphSynchronizationManager, gra
 		return
 	}
 
-	graph1 = testutils.CreateCid("G1")
-	graph2 = testutils.CreateCid("G2")
+	graph1 = "G1"
+	graph2 = "G2"
 
 	root = createAddNodeOp("100")
 	child = createAddNodeOp("101", root)
@@ -190,7 +189,7 @@ func TestTwoGraphs(t *testing.T) {
 	u3G2.Update(newOp)
 
 	waitForGraphSize(u1G1, 3)
-	log.Println("------------")
+	log.Info("------------")
 	waitForGraphSize(u2G2, 3)
 }
 
@@ -214,13 +213,13 @@ func TestTwoGraphsMWIPNS(t *testing.T) {
 	waitForGraphSize(u1G1, 3)
 	waitForGraphSize(u2G2, 3)
 
-	log.Printf("User 2 - Graph 1")
+	log.Infof("User 2 - Graph 1")
 	u2g1versions := ipnsU2G1.GetLatestVersionHistories()
 	for _, n := range u2g1versions {
 		printDag(t, n, 0)
 	}
 
-	log.Printf("User 3 - Graph 2")
+	log.Infof("User 3 - Graph 2")
 	u3g2versions := ipnsU3G2.GetLatestVersionHistories()
 	for _, n := range u3g2versions {
 		printDag(t, n, 0)

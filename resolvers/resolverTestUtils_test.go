@@ -2,17 +2,16 @@ package resolvers
 
 import (
 	"context"
+	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	mrand "math/rand"
 
-	cid "github.com/ipfs/go-cid"
-
 	gsync "github.com/aschmahmann/ipshare/sync"
-	testutils "github.com/aschmahmann/ipshare/testutils"
+	"github.com/aschmahmann/ipshare/testutils"
 
 	host "github.com/libp2p/go-libp2p-host"
 )
 
-func createFullyConnectedGsync(rnd *mrand.Rand, numHosts int, graphKey cid.Cid) ([]gsync.GossipMultiWriterIPNS, error) {
+func createFullyConnectedGsync(rnd *mrand.Rand, numHosts int, graphID string) ([]gsync.GossipMultiWriterIPNS, error) {
 	hosts, peers, err := testutils.CreateHostAndPeers(rnd, 10001, numHosts, false)
 	if err != nil {
 		return nil, err
@@ -21,28 +20,38 @@ func createFullyConnectedGsync(rnd *mrand.Rand, numHosts int, graphKey cid.Cid) 
 	gs := make([]gsync.GossipMultiWriterIPNS, numHosts)
 	for i, h := range hosts {
 		s := gsync.NewMemoryIPNSLocalStorage()
-		s.AddPeers(graphKey, peers...)
-		s.AddOps(graphKey, &gsync.AddNodeOperation{Parents: []*cid.Cid{}, Value: &graphKey})
+		s.AddPeers(graphID, peers...)
+		op, err := gsync.CreateRootNode(graphID)
+		if err != nil {
+			return nil, err
+		}
+		s.AddOps(graphID, op)
 
-		gs[i] = gsync.NewGossipMultiWriterIPNS(graphKey, gsync.NewGraphSychronizer(h, s, mrand.NewSource(rnd.Int63())))
+		gs[i] = gsync.NewGossipMultiWriterIPNS(graphID, gsync.NewGraphSychronizer(h, s, mrand.NewSource(rnd.Int63())))
 	}
 
 	return gs, nil
 }
 
-func createFullyConnectedPubSubMWIPNS(rnd *mrand.Rand, numHosts int, graphKey cid.Cid) ([]gsync.GossipMultiWriterIPNS, error) {
+func createFullyConnectedPubSubMWIPNS(rnd *mrand.Rand, numHosts int, graphID string) ([]gsync.GossipMultiWriterIPNS, error) {
 	hosts, _, err := testutils.CreateHostAndPeers(rnd, 10001, numHosts, false)
 	if err != nil {
 		return nil, err
 	}
 
+	ctx := context.Background()
+
 	gs := make([]gsync.GossipMultiWriterIPNS, numHosts)
 	for i, h := range hosts {
-		p, gsm, err := gsync.NewGossipSyncMWIPNS(context.Background(), h)
+		ps, err := pubsub.NewGossipSub(ctx, h)
 		if err != nil {
 			return nil, err
 		}
-		g := gsync.NewPubSubMWIPNS(p, gsm, graphKey)
+		mgr := gsync.NewMultiWriterPubSub(ctx, h, ps, gsync.NewManualGraphSychronizer(h))
+		g, err := mgr.GetValue(ctx, graphID)
+		if err != nil {
+			return nil, err
+		}
 		//s.AddOps(graphKey, &gsync.AddNodeOperation{Parents: []*cid.Cid{}, Value: &graphKey})
 
 		gs[i] = g

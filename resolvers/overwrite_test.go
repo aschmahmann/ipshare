@@ -12,9 +12,9 @@ import (
 
 func TestMWOverwrite(t *testing.T) {
 	reader := mrand.New(mrand.NewSource(mrand.Int63()))
-	graphKey := testutils.CreateCid("MWOverwrite")
+	graphID := "MWOverwrite"
 
-	gsArr, err := createFullyConnectedGsync(reader, 2, graphKey)
+	gsArr, err := createFullyConnectedGsync(reader, 2, graphID)
 	if err != nil {
 		t.Fatal(err)
 	}

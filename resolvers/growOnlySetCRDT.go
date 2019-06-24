@@ -133,7 +133,16 @@ func (mwSet *NamedMultiWriterStringSetCRDT) GetSet() map[string]struct{} {
 	}
 
 	//TODO: Is root.GetValue better than NodeID?
-	if root.GetValue() == mwSet.GraphManager.GetKey() {
+	graphID := mwSet.GraphManager.GetKey()
+	graphIDasOp, err := gsync.CreateRootNode(graphID)
+
+	//TODO: What if there's an error here
+	if err != nil {
+		panic(err)
+
+	}
+
+	if root.GetValue() == *graphIDasOp.Value {
 		for _, c := range root.GetChildren() {
 			recSetAdd(c)
 		}

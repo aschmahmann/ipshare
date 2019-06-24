@@ -33,10 +33,7 @@ func cidsEqual(a, b []*cid.Cid) bool {
 func TestAlgoMarshalRoundtrip(t *testing.T) {
 	cidBuilder := cid.V1Builder{Codec: cid.Raw, MhType: multihash.SHA2_256, MhLength: -1}
 
-	graphCid, err := cidBuilder.Sum([]byte("Graph ID"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	graphID := "Graph ID"
 	op1Cid, err := cidBuilder.Sum([]byte("Op1"))
 	if err != nil {
 		t.Fatal(err)
@@ -46,7 +43,7 @@ func TestAlgoMarshalRoundtrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rpc := &FullSendGSync{GraphID: &graphCid, Operations: []*AddNodeOperation{&AddNodeOperation{Value: &op1Cid, Parents: []*cid.Cid{}}, &AddNodeOperation{Value: &op2Cid, Parents: []*cid.Cid{&op1Cid}}}}
+	rpc := &FullSendGSync{GraphID: graphID, Operations: []*AddNodeOperation{{Value: &op1Cid, Parents: []*cid.Cid{}}, {Value: &op2Cid, Parents: []*cid.Cid{&op1Cid}}}}
 	rpcBytes, err := rpc.Marshal()
 	if err != nil {
 		t.Fatal(err)

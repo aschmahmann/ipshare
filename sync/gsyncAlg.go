@@ -2,7 +2,6 @@ package sync
 
 import (
 	fmt "fmt"
-	"log"
 
 	cid "github.com/ipfs/go-cid"
 	cbor "github.com/ipfs/go-ipld-cbor"
@@ -64,7 +63,7 @@ func (msg *AddNodeOperation) Unmarshal(mk []byte) error {
 
 // FullSendGSync is a (large) message that sends a peer's full state about the graph being synchronized
 type FullSendGSync struct {
-	GraphID    *cid.Cid
+	GraphID    string
 	Operations []*AddNodeOperation
 }
 
@@ -80,7 +79,7 @@ func (msg *FullSendGSync) Unmarshal(mk []byte) error {
 
 // FullSendGSync is a (large) message that sends a peer's full state about the graph being synchronized
 type RequestFullSendGSync struct {
-	GraphID *cid.Cid
+	GraphID string
 }
 
 // Marshal returns the byte representation of the object
@@ -103,11 +102,11 @@ func asyncGsyncReceiver(gs GraphSynchronizationManager, s net.Stream, done chan 
 		if err != nil {
 			closeErr := net.FullClose(s)
 			if closeErr != nil {
-				log.Print(closeErr)
+				log.Info(closeErr)
 			}
 		} else {
 			if err = s.Close(); err != nil {
-				log.Print(err)
+				log.Info(err)
 			}
 		}
 		if !isDone {
@@ -129,7 +128,7 @@ func asyncGsyncReceiver(gs GraphSynchronizationManager, s net.Stream, done chan 
 			return errors.Wrap(err, "Could not unmarshal message")
 		}
 
-		graphID := *typedMsg.GraphID
+		graphID := typedMsg.GraphID
 
 		graph := gs.GetGraph(graphID)
 
@@ -146,7 +145,7 @@ func asyncGsyncReceiver(gs GraphSynchronizationManager, s net.Stream, done chan 
 		}
 
 		graphID := typedMsg.GraphID
-		graph := gs.GetGraph(*graphID)
+		graph := gs.GetGraph(graphID)
 
 		msg := &FullSendGSync{GraphID: graphID, Operations: graph.GetOps()}
 		msgBytes, err := msg.Marshal()

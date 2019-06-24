@@ -2,263 +2,351 @@ package sync
 
 import (
 	"context"
+	"encoding/base64"
+	logging "github.com/ipfs/go-log"
+	ropts "github.com/libp2p/go-libp2p-routing/options"
+	"github.com/pkg/errors"
+	"sync"
+	"time"
 
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 
 	host "github.com/libp2p/go-libp2p-host"
 	peer "github.com/libp2p/go-libp2p-peer"
-	protocol "github.com/libp2p/go-libp2p-protocol"
+
+	cbor "github.com/ipfs/go-ipld-cbor"
 
 	cid "github.com/ipfs/go-cid"
-	pb "github.com/libp2p/go-libp2p-pubsub/pb"
-	multihash "github.com/multiformats/go-multihash"
 )
 
-type MWMessageCache struct {
-	ComputeID     func(msg *pb.Message) string
-	topicMsgIDMap map[string]OperationDAG
-	IDMsgMap      map[string]*pb.Message
-	cidBuilder    cid.Builder
-	syncMgr       ManualGraphSynchronizationManager
+var log = logging.Logger("pubsub-mw")
+
+func init() {
+	cbor.RegisterCborType(CidList{})
 }
 
-type SynchronizeCompatibleMessageCacher interface {
-	pubsub.MessageCacheReader
-	Put(msg *pb.Message) map[string]struct{}
+// CidList is a list of Cids
+type CidList struct {
+	Heads []cid.Cid
 }
 
-func NewMWMessageCache(ComputeID func(msg *pb.Message) string) *MWMessageCache {
-	return &MWMessageCache{
-		topicMsgIDMap: make(map[string]OperationDAG),
-		IDMsgMap:      make(map[string]*pb.Message),
-		ComputeID:     ComputeID,
-		cidBuilder:    cid.V1Builder{Codec: cid.Raw, MhType: multihash.SHA2_256, MhLength: -1},
+// Marshal returns the byte representation of the object
+func (msg CidList) Marshal() ([]byte, error) {
+	return cbor.DumpObject(msg)
+}
+
+// Unmarshal fills the structure with data from the bytes
+func (msg *CidList) Unmarshal(mk []byte) error {
+	return cbor.DecodeInto(mk, msg)
+}
+
+type MWmgr struct {
+	ctx context.Context
+	ps  *pubsub.PubSub
+
+	host host.Host
+
+	rebroadcastInitialDelay time.Duration
+	rebroadcastInterval     time.Duration
+
+	syncMgr ManualGraphSynchronizationManager
+
+	// Map of keys to subscriptions.
+	//
+	// If a key is present but the subscription is nil, we've bootstrapped
+	// but haven't subscribed.
+	mx   sync.Mutex
+	subs map[string]*pubsub.Subscription
+}
+
+// KeyToTopic converts a binary record key to a pubsub topic key.
+func KeyToTopic(key string) string {
+	// Record-store keys are arbitrary binary. However, pubsub requires UTF-8 string topic IDs.
+	// Encodes to "/record/base64url(key)"
+	return "/record/" + base64.RawURLEncoding.EncodeToString([]byte(key))
+}
+
+// NewPubsubPublisher constructs a new Publisher that publishes IPNS records through pubsub.
+// The constructor interface is complicated by the need to bootstrap the pubsub topic.
+// This could be greatly simplified if the pubsub implementation handled bootstrap itself
+func NewMultiWriterPubSub(ctx context.Context, host host.Host, ps *pubsub.PubSub, syncMgr ManualGraphSynchronizationManager) *MWmgr {
+	return &MWmgr{
+		ctx:                     ctx,
+		ps:                      ps,
+		host:                    host,
+		rebroadcastInitialDelay: 100 * time.Millisecond,
+		rebroadcastInterval:     time.Second,
+		subs:                    make(map[string]*pubsub.Subscription),
+		syncMgr:                 syncMgr,
 	}
 }
 
-func (mc *MWMessageCache) Put(msg *pb.Message) map[string]struct{} {
-	mid := mc.ComputeID(msg)
-	_, messageSeen := mc.IDMsgMap[mid]
-	if !messageSeen {
-		mc.IDMsgMap[mid] = msg
+func (p *MWmgr) Subscribe(key string) error {
+	p.mx.Lock()
+	// see if we already have a pubsub subscription; if not, subscribe
+	sub := p.subs[key]
+	p.mx.Unlock()
+
+	if sub != nil {
+		return nil
 	}
 
-	op := &AddNodeOperation{}
-	if err := op.Unmarshal(msg.Data); err != nil {
-		panic(err)
+	topic := KeyToTopic(key)
+
+	// Ignore the error. We have to check again anyways to make sure the
+	// record hasn't expired.
+	//
+	// Also, make sure to do this *before* subscribing.
+	myID := p.host.ID()
+	_ = p.ps.RegisterTopicValidator(topic, func(ctx context.Context, src peer.ID, msg *pubsub.Message) bool {
+		if src == myID {
+			return true
+		}
+		return p.addMessage(key, msg.GetData(), msg.GetFrom())
+	})
+
+	p.syncMgr.AddGraph(key)
+
+	sub, err := p.ps.Subscribe(topic)
+	if err != nil {
+		p.mx.Unlock()
+		return err
 	}
 
-	topicsToSynchronize := make(map[string]struct{})
+	p.mx.Lock()
+	existingSub, _ := p.subs[key]
+	if existingSub != nil {
+		p.mx.Unlock()
+		sub.Cancel()
+		return nil
+	}
 
-	for _, topic := range msg.TopicIDs {
-		lastMsgID, ok := mc.topicMsgIDMap[topic]
-		graphID, err := cid.Decode(topic)
-		if err != nil {
-			continue
+	p.subs[key] = sub
+	go p.handleSubscription(sub, key)
+	p.mx.Unlock()
+
+	go p.rebroadcast(key)
+	log.Debugf("PubsubResolve: subscribed to %s", key)
+
+	return nil
+}
+
+// Publish publishes an IPNS record through pubsub with default TTL
+func (p *MWmgr) AddNewVersion(ctx context.Context, key string, newCid *cid.Cid, prevCids []*cid.Cid, opts ...ropts.Option) error {
+	// Record-store keys are arbitrary binary. However, pubsub requires UTF-8 string topic IDs.
+	// Encode to "/record/base64url(key)"
+	topic := KeyToTopic(key)
+
+	if err := p.Subscribe(key); err != nil {
+		return err
+	}
+
+	log.Debugf("PubsubPublish: publish value for key", key)
+
+	op := &AddNodeOperation{Value: newCid, Parents: prevCids}
+	data, err := op.Marshal()
+	if err != nil {
+		return err
+	}
+
+	if err := p.ps.Publish(topic, data); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (p *MWmgr) addMessage(key string, val []byte, src peer.ID) bool {
+	//if p.Validator.Validate(key, val) != nil {
+	//	return false
+	//}
+
+	graph, err := p.getLocal(key)
+	if err != nil {
+		return true
+	}
+
+	// Check if message is a list of Cids
+	cidLst := &CidList{}
+	if err := cidLst.Unmarshal(val); err == nil {
+		if len(cidLst.Heads) == 0 {
+			return false
 		}
 
-		if !ok {
-			mc.syncMgr.AddGraph(graphID)
-			graph := mc.syncMgr.GetGraph(graphID)
-			mc.topicMsgIDMap[topic] = graph
-			lastMsgID = graph
+		// Do we have these heads already, if not queue up a sync
+		// Only propagate an operation if we have the entire graph behind it
+		syncRequired := false
+		for _, head := range cidLst.Heads {
+			if _, ok := graph.TryGetNode(head); !ok {
+				syncRequired = true
+				break
+			}
+		}
+
+		if syncRequired {
+			p.syncMgr.SyncGraph(key, src)
+		}
+		return !syncRequired
+	} else {
+		op := &AddNodeOperation{}
+		if err := op.Unmarshal(val); err != nil {
+			return false
 		}
 
 		// Is the msg the graph root? If so ignore it
 		if len(op.Parents) == 0 {
-			continue
-		}
-
-		// Have we seen this message? If so ignore it
-		// Note: it's possible we've only seen this for a particular topic and not all of them
-		// That's ok though, since we'll catch the update on the next sync
-		if messageSeen {
-			continue
+			return false
 		}
 
 		// Does the message build off of existing nodes? If so add it, if not queue up a sync
 		syncRequired := false
 		for _, p := range op.Parents {
-			if _, ok := lastMsgID.TryGetNode(*p); !ok {
+			if _, ok := graph.TryGetNode(*p); !ok {
 				syncRequired = true
+				break
 			}
 		}
 
-		if !syncRequired {
-			lastMsgID.AddNewVersion(op.Value, op.Parents...)
+		// If a sync is required do it, otherwise just add the operation
+		// Only propagate an operation if we have the entire graph behind it
+		if syncRequired {
+			p.syncMgr.SyncGraph(key, src)
 		} else {
-			topicsToSynchronize[topic] = struct{}{}
+			graph.AddNewVersion(op.Value, op.Parents...)
 		}
+		return !syncRequired
 	}
-	return topicsToSynchronize
 }
 
-func (mc *MWMessageCache) Get(mid string) (*pb.Message, bool) {
-	m, ok := mc.IDMsgMap[mid]
-	return m, ok
-}
+func (p *MWmgr) rebroadcast(key string) {
+	topic := KeyToTopic(key)
+	time.Sleep(p.rebroadcastInitialDelay)
 
-func (mc *MWMessageCache) GetGossipIDs(topic string) []string {
-	mgraph, ok := mc.topicMsgIDMap[topic]
-	if ok {
-		graphHeads := mgraph.GetLatestVersionHistories()
-		gossipMsgs := make([]string, len(graphHeads))
-		for i, h := range graphHeads {
-			gossipMsgs[i] = h.GetNodeID().String()
-		}
-		return gossipMsgs
-	}
-	return []string{}
-}
+	ticker := time.NewTicker(p.rebroadcastInterval)
+	defer ticker.Stop()
 
-func (mc *MWMessageCache) Shift() {}
-
-type SyncGossipConfiguration struct {
-	mcache             SynchronizeCompatibleMessageCacher
-	emitter            pubsub.EmittingStrategy
-	supportedProtocols []protocol.ID
-	protocol           protocol.ID
-	syncMgr            ManualGraphSynchronizationManager
-}
-
-func (gs *SyncGossipConfiguration) GetCacher() pubsub.MessageCacheReader {
-	return gs.mcache
-}
-
-func (gs *SyncGossipConfiguration) SupportedProtocols() []protocol.ID {
-	return gs.supportedProtocols
-}
-
-func (gs *SyncGossipConfiguration) Protocol() protocol.ID {
-	return gs.protocol
-}
-
-func (gs *SyncGossipConfiguration) Publish(rt *pubsub.GossipSubRouter, from peer.ID, msg *pb.Message) {
-	topicsToSync := gs.mcache.Put(msg)
-
-	calculatedFrom := peer.ID(msg.GetFrom())
-
-	for _, topic := range msg.GetTopicIDs() {
-		if _, ok := topicsToSync[topic]; ok {
-			graphID, err := cid.Decode(topic)
-			if err != nil {
-				continue
+	for {
+		select {
+		case <-ticker.C:
+			val, _ := p.getLocal(key)
+			if val != nil {
+				graphHeads := val.GetLatestVersionHistories()
+				gossipMsgs := make([]cid.Cid, len(graphHeads))
+				for i, h := range graphHeads {
+					gossipMsgs[i] = h.GetNodeID()
+				}
+				cidLst := &CidList{gossipMsgs}
+				cidLstBytes, err := cidLst.Marshal()
+				if err != nil {
+					log.Debugf("could not marshal list of cids: %v", cidLst)
+				} else {
+					_ = p.ps.Publish(topic, cidLstBytes)
+				}
 			}
-
-			gs.syncMgr.SyncGraph(&graphID, calculatedFrom)
-		} else {
-			tosend := make(map[peer.ID]struct{})
-			rt.AddGossipPeers(tosend, []string{topic}, false)
-
-			_, ok := tosend[from]
-			if ok {
-				delete(tosend, from)
-			}
-
-			_, ok = tosend[calculatedFrom]
-			if ok {
-				delete(tosend, calculatedFrom)
-			}
-
-			rt.PropagateMSG(tosend, msg)
+		case <-p.ctx.Done():
+			return
 		}
 	}
 }
 
-func (gs *SyncGossipConfiguration) GetEmitPeers(topicPeers pubsub.GetFilteredPeers, meshPeers map[peer.ID]struct{}) map[peer.ID]struct{} {
-	return gs.emitter.GetEmitPeers(topicPeers, meshPeers)
-}
-
-func (gs *SyncGossipConfiguration) OnGraft(rt *pubsub.GossipSubRouter, topic string, peer peer.ID) {
-	rt.RequestMessage(topic, peer)
-}
-
-// NewGossipBaseSub returns a new PubSub object using GossipSubRouter as the router.
-func NewGossipSyncMW(ctx context.Context, h host.Host, mcache *MWMessageCache, protocolID protocol.ID, opts ...pubsub.Option) (*pubsub.PubSub, error) {
-	rt := pubsub.NewGossipSubRouterWithStrategies(&SyncGossipConfiguration{
-		mcache:             mcache,
-		supportedProtocols: []protocol.ID{protocolID},
-		protocol:           protocolID,
-	})
-	return pubsub.NewPubSub(ctx, h, rt, opts...)
-}
-
-const MWIPNSKey = protocol.ID("/mwipns/1.0.0")
-
-func NewGossipSyncMWIPNS(ctx context.Context, h host.Host, opts ...pubsub.Option) (*pubsub.PubSub, ManualGraphSynchronizationManager, error) {
-	protocolID := MWIPNSKey
-	cidbuilder := cid.V1Builder{Codec: cid.Raw, MhType: multihash.SHA2_256, MhLength: -1}
-	graphSynchronizer := NewManualGraphSychronizer(h)
-	mcache := &MWMessageCache{
-		topicMsgIDMap: make(map[string]OperationDAG),
-		IDMsgMap:      make(map[string]*pb.Message),
-		ComputeID: func(msg *pb.Message) string {
-			cid, err := cidbuilder.Sum(msg.GetData())
-			if err != nil {
-				return ""
-			}
-			return cid.String()
-		},
-		cidBuilder: cidbuilder,
-		syncMgr:    graphSynchronizer,
+func (p *MWmgr) getLocal(key string) (OperationDAG, error) {
+	graph := p.syncMgr.GetGraph(key)
+	if graph == nil {
+		return nil, errors.Errorf("could not find graph %s", key)
 	}
-	rt := pubsub.NewGossipSubRouterWithStrategies(&SyncGossipConfiguration{
-		mcache:             mcache,
-		emitter:            pubsub.NewRandomPeersStrategy(pubsub.GossipSubD),
-		supportedProtocols: []protocol.ID{protocolID},
-		protocol:           protocolID,
-		syncMgr:            graphSynchronizer,
-	})
-
-	ps, err := pubsub.NewPubSub(ctx, h, rt, opts...)
-	return ps, graphSynchronizer, err
+	return graph, nil
 }
 
-type PubSubMWIPNS struct {
-	pubsub   *pubsub.PubSub
-	manualGS ManualGraphSynchronizationManager
-	graphID  cid.Cid
-}
+func (p *MWmgr) GetValue(ctx context.Context, key string, opts ...ropts.Option) (GossipMultiWriterIPNS, error) {
+	if err := p.Subscribe(key); err != nil {
+		return nil, err
+	}
 
-func NewPubSubMWIPNS(p *pubsub.PubSub, gs ManualGraphSynchronizationManager, IPNSKey cid.Cid) GossipMultiWriterIPNS {
-	_, err := p.Subscribe(IPNSKey.String(), pubsub.WithProtocol(MWIPNSKey))
+	gs, err := p.getLocal(key)
+
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 
-	gs.AddGraph(IPNSKey)
+	return &pubSubMWIPNS{
+		ctx:     ctx,
+		mgr:     p,
+		graph:   gs,
+		graphID: key,
+	}, nil
+}
 
-	return &PubSubMWIPNS{
-		pubsub:   p,
-		manualGS: gs,
-		graphID:  IPNSKey,
+// GetSubscriptions retrieves a list of active topic subscriptions
+func (p *MWmgr) GetSubscriptions() []string {
+	p.mx.Lock()
+	defer p.mx.Unlock()
+
+	var res []string
+	for sub := range p.subs {
+		res = append(res, sub)
+	}
+
+	return res
+}
+
+// Cancel cancels a topic subscription; returns true if an active
+// subscription was canceled
+func (p *MWmgr) Cancel(name string) (bool, error) {
+	p.mx.Lock()
+	defer p.mx.Unlock()
+
+	sub, ok := p.subs[name]
+	if ok {
+		sub.Cancel()
+		delete(p.subs, name)
+	}
+
+	return ok, nil
+}
+
+func (p *MWmgr) handleSubscription(sub *pubsub.Subscription, key string) {
+	defer sub.Cancel()
+
+	for {
+		msg, err := sub.Next(p.ctx)
+		if err != nil {
+			if err != context.Canceled {
+				log.Warningf("PubsubResolve: subscription error in %s: %s", key, err.Error())
+			}
+			return
+		}
+
+		p.addMessage(key, msg.GetData(), msg.GetFrom())
 	}
 }
 
-func (ipns *PubSubMWIPNS) GetKey() cid.Cid {
+type pubSubMWIPNS struct {
+	ctx     context.Context
+	mgr     *MWmgr
+	graph   OperationDAG
+	graphID string
+}
+
+func (ipns *pubSubMWIPNS) GetKey() string {
 	return ipns.graphID
 }
 
-func (gs *PubSubMWIPNS) AddNewVersion(newCid *cid.Cid, prevCids ...*cid.Cid) {
-	op := &AddNodeOperation{Value: newCid, Parents: prevCids}
-	data, err := op.Marshal()
+func (gs *pubSubMWIPNS) AddNewVersion(newCid *cid.Cid, prevCids ...*cid.Cid) {
+	err := gs.mgr.AddNewVersion(gs.ctx, gs.graphID, newCid, prevCids)
 	//TODO: what if err?
 	if err != nil {
 		panic(err)
 	}
-	if err := gs.pubsub.Publish(gs.graphID.String(), data); err != nil {
-		panic(err)
-	}
 }
 
-func (gs *PubSubMWIPNS) GetLatestVersionHistories() []DagNode {
-	return gs.manualGS.GetGraph(gs.graphID).GetLatestVersionHistories()
+func (gs *pubSubMWIPNS) GetLatestVersionHistories() []DagNode {
+	return gs.graph.GetLatestVersionHistories()
 }
 
-func (gs *PubSubMWIPNS) GetRoot() DagNode {
-	return gs.manualGS.GetGraph(gs.graphID).GetRoot()
+func (gs *pubSubMWIPNS) GetRoot() DagNode {
+	return gs.graph.GetRoot()
 }
 
-func (gs *PubSubMWIPNS) GetNumberOfOperations() int {
-	return len(gs.manualGS.GetGraph(gs.graphID).GetOps())
+func (gs *pubSubMWIPNS) GetNumberOfOperations() int {
+	return len(gs.graph.GetOps())
 }

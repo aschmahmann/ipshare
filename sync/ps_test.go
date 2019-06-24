@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"bytes"
 	"context"
 	"os"
 	"time"
@@ -10,7 +9,6 @@ import (
 	"runtime/pprof"
 
 	ipns "github.com/ipfs/go-ipns"
-	ipnspb "github.com/ipfs/go-ipns/pb"
 	host "github.com/libp2p/go-libp2p-host"
 
 	"math/rand"
@@ -25,8 +23,6 @@ import (
 	crypto "github.com/libp2p/go-libp2p-crypto"
 
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
-
-	"log"
 
 	"fmt"
 	ds "github.com/ipfs/go-datastore"
@@ -83,10 +79,6 @@ func connectAll(t testing.TB, hosts []host.Host) {
 	}
 }
 
-func NewIPNSGossipSub(ctx context.Context, h host.Host, opts ...pubsub.Option) (*pubsub.PubSub, error) {
-	return pubsub.NewGossipSyncLWW(context.Background(), h, pubsub.NewLWWMessageCache(ipns.Validator{}), "ipnsps/0.0.1")
-}
-
 func waitForGossipSize(g GossipMultiWriterIPNS, graphSize int) {
 	c := make(chan bool)
 
@@ -102,6 +94,17 @@ func waitForGossipSize(g GossipMultiWriterIPNS, graphSize int) {
 	<-c
 }
 
+func NewGossipSyncMWIPNS(ctx context.Context, host host.Host) (*MWmgr, error) {
+	ps, err := pubsub.NewGossipSub(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+
+	syncMgr := NewManualGraphSychronizer(host)
+
+	return NewMultiWriterPubSub(ctx, host, ps, syncMgr), nil
+}
+
 func TestTwoGraphsMWPSIPNS(t *testing.T) {
 	reader := mrand.New(mrand.NewSource(mrand.Int63()))
 	hosts, _, err := testutils.CreateHostAndPeers(reader, 10001, 3, true)
@@ -110,8 +113,8 @@ func TestTwoGraphsMWPSIPNS(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	graph1 := testutils.CreateCid("G1")
-	graph2 := testutils.CreateCid("G2")
+	graph1 := "G1"
+	graph2 := "G2"
 
 	root1 := createAddNodeOp("G1")
 	child1 := createAddNodeOp("101", root1)
@@ -119,21 +122,38 @@ func TestTwoGraphsMWPSIPNS(t *testing.T) {
 	root2 := createAddNodeOp("G2")
 	child2 := createAddNodeOp("101", root2)
 
-	ps1, gs1, err := NewGossipSyncMWIPNS(context.Background(), hosts[0])
-	u1G1 := NewPubSubMWIPNS(ps1, gs1, graph1)
+	ctx := context.Background()
+
+	gs1, err := NewGossipSyncMWIPNS(ctx, hosts[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	u1G1, err := gs1.GetValue(ctx, graph1)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	ps2, gs2, err := NewGossipSyncMWIPNS(context.Background(), hosts[1])
-	u2G1 := NewPubSubMWIPNS(ps2, gs2, graph1)
-	u2G2 := NewPubSubMWIPNS(ps2, gs2, graph2)
+	gs2, err := NewGossipSyncMWIPNS(context.Background(), hosts[1])
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	ps3, gs3, err := NewGossipSyncMWIPNS(context.Background(), hosts[2])
-	u3G2 := NewPubSubMWIPNS(ps3, gs3, graph2)
+	u2G1, err := gs2.GetValue(ctx, graph1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	u2G2, err := gs2.GetValue(ctx, graph2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	gs3, err := NewGossipSyncMWIPNS(context.Background(), hosts[2])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	u3G2, err := gs3.GetValue(ctx, graph2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,13 +176,13 @@ func TestTwoGraphsMWPSIPNS(t *testing.T) {
 	waitForGossipSize(u1G1, 3)
 	waitForGossipSize(u2G2, 3)
 
-	log.Printf("User 2 - Graph 1")
+	log.Infof("User 2 - Graph 1")
 	u2g1versions := u2G1.GetLatestVersionHistories()
 	for _, n := range u2g1versions {
 		printDag(t, n, 0)
 	}
 
-	log.Printf("User 3 - Graph 2")
+	log.Infof("User 3 - Graph 2")
 	u3g2versions := u3G2.GetLatestVersionHistories()
 	for _, n := range u3g2versions {
 		printDag(t, n, 0)
@@ -199,84 +219,6 @@ func TestIPNSPS(t *testing.T) {
 }
 
 func RunIPNSPS(t testing.TB, hosts []host.Host) {
-	f, err := os.Create("t.out")
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	gossips := make([]*pubsub.PubSub, len(hosts))
-	subs := make([]*pubsub.Subscription, len(hosts))
-	topic := "InsertIPNSKeyHere"
-
-	for i := 0; i < len(hosts); i++ {
-		gossips[i], err = NewIPNSGossipSub(context.Background(), hosts[i])
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		subs[i], err = gossips[i].Subscribe(topic)
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	if len(hosts) > 2 {
-		sparseConnect(t, hosts[1:])
-	}
-
-	ts := time.Now().Add(time.Minute * 5)
-	priv, _, err := crypto.GenerateEd25519Key(mrand.New(mrand.NewSource(mrand.Int63())))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	ipnsEntry, err := ipns.Create(priv, []byte("/ipfs/ABCDEFGHIJKLMNOP"), 1, ts)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	msgBytes, err := proto.Marshal(ipnsEntry)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if err = gossips[1].Publish(topic, msgBytes); err != nil {
-		t.Fatal(err)
-	}
-
-	for i := 1; i < len(hosts); i++ {
-		verifyEntry(t, subs[i], ipnsEntry)
-	}
-
-	pprof.StartCPUProfile(f)
-	defer pprof.StopCPUProfile()
-
-	connect(t, hosts[0], hosts[1])
-
-	verifyEntry(t, subs[0], ipnsEntry)
-}
-
-func verifyEntry(t testing.TB, sub *pubsub.Subscription, ipnsEntry *ipnspb.IpnsEntry) {
-	receivedMsg, err := sub.Next(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	receivedEntry := &ipnspb.IpnsEntry{}
-	if err = proto.Unmarshal(receivedMsg.Data, receivedEntry); err != nil {
-		t.Fatal(err)
-	}
-
-	if !bytes.Equal(receivedEntry.Value, ipnsEntry.Value) {
-		t.Fatalf("Received message: %v not equal to sent message %v", string(receivedEntry.Value), string(ipnsEntry.Value))
-	}
-}
-
-func TestIPNSPS2(t *testing.T) {
-	hosts, _, err := testutils.CreateHostAndPeersTest(t, mrand.New(mrand.NewSource(0)), 2, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	routers := make([]*psrouter.PubsubValueStore, len(hosts))
 	for i, h := range hosts {
 		routers[i] = getPSRouter(h)
@@ -303,26 +245,26 @@ func TestIPNSPS2(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = routers[0].Subscribe(ipns.RecordKey(id))
-	if err != nil {
+	if err = routers[0].Subscribe(ipns.RecordKey(id)); err != nil {
 		t.Fatal(err)
 	}
 
-	err = routers[0].PutValue(context.Background(), ipns.RecordKey(id), msgBytes)
-	if err != nil {
+	if err = routers[0].PutValue(context.Background(), ipns.RecordKey(id), msgBytes); err != nil {
 		t.Fatal(err)
 	}
 
 	//time.Sleep(time.Millisecond * 6000)
 
 	for i := 1; i < len(hosts); i++ {
-		routers[i].Subscribe(ipns.RecordKey(id))
+		if err = routers[i].Subscribe(ipns.RecordKey(id)); err != nil {
+			t.Fatal(err)
+		}
 	}
 	for i := 1; i < len(hosts); i++ {
 		connect(t, hosts[0], hosts[i])
 	}
 
-	time.Sleep(time.Millisecond * 200)
+	time.Sleep(time.Millisecond * 100) //was 200
 
 	successes := 0
 	for i := 1; i < len(hosts); i++ {
@@ -331,17 +273,9 @@ func TestIPNSPS2(t *testing.T) {
 			successes++
 		}
 	}
-	if successes > 0 {
-		//t.Fatalf("successes: %v", successes)
-	} else {
-		t.Fatal("failure")
+	if successes == 0 {
+		t.Fatal("no hosts received update")
 	}
-
-	// b, err := routers[1].GetValue(context.Background(), ipns.RecordKey(id))
-	// if err !=nil{
-	// 	t.Fatal(err)
-	// }
-	// _ = b
 }
 
 func TestNamesysPS(t *testing.T) {
@@ -398,7 +332,7 @@ func getPSRouter(host host.Host) *psrouter.PubsubValueStore {
 	if err != nil {
 		panic(err)
 	}
-	ps, err := NewIPNSGossipSub(ctx, host)
+	ps, err := pubsub.NewGossipSub(ctx, host)
 	if err != nil {
 		panic(err)
 	}
